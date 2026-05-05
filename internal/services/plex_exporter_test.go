@@ -43,6 +43,23 @@ func TestPlexExportPathNeedsRefreshDetectsBrokenSymlink(t *testing.T) {
 	}
 }
 
+func TestPlexExportPathNeedsRefreshDetectsSymlinkLoop(t *testing.T) {
+	base := t.TempDir()
+	linkPath := filepath.Join(base, "loop.mkv")
+
+	if err := os.Symlink(linkPath, linkPath); err != nil {
+		t.Fatalf("create symlink loop: %v", err)
+	}
+
+	needsRefresh, err := plexExportPathNeedsRefresh(linkPath)
+	if err != nil {
+		t.Fatalf("check symlink loop: %v", err)
+	}
+	if !needsRefresh {
+		t.Fatal("expected symlink loop to need refresh")
+	}
+}
+
 func TestRemoveManagedExportSymlinkOnlyRemovesSymlinksUnderRoots(t *testing.T) {
 	base := t.TempDir()
 	moviesRoot := filepath.Join(base, "movies")
@@ -160,6 +177,7 @@ func TestFindBestMountedMatchSeriesRejectsEpisodeOnlyUnrelatedTitle(t *testing.T
 		},
 		"Absolute Value of Romance",
 		2026,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("find mounted match: %v", err)
@@ -186,6 +204,7 @@ func TestFindBestMountedMatchSeriesDirectoryUsesRequestedEpisode(t *testing.T) {
 		},
 		"Dandelion",
 		2025,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("find mounted match: %v", err)
@@ -209,12 +228,35 @@ func TestFindBestMountedMatchSeriesDirectoryRejectsWrongEpisode(t *testing.T) {
 		},
 		"Dandelion",
 		2025,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("find mounted match: %v", err)
 	}
 	if match != "" {
 		t.Fatalf("expected missing requested episode to be ignored, got %s", match)
+	}
+}
+
+func TestFindBestMountedMatchSkipsManagedExportRoots(t *testing.T) {
+	base := t.TempDir()
+	rdRoot := filepath.Join(base, "mount")
+	exportRoot := filepath.Join(rdRoot, "movies")
+	exportPath := filepath.Join(exportRoot, "Vampire Zombies...from Space! (2026) {tmdb-1174240}", "Vampire Zombies...from Space! (2026).mp4")
+	writeTestSymlink(t, exportPath, exportPath)
+
+	match, err := findBestMountedMatch(rdRoot,
+		"Vampire Zombies...from Space! 2026 1080p WEB-DL.mp4",
+		&models.CachedStream{MediaType: "movie"},
+		"Vampire Zombies...from Space!",
+		2026,
+		[]string{exportRoot},
+	)
+	if err != nil {
+		t.Fatalf("find mounted match: %v", err)
+	}
+	if match != "" {
+		t.Fatalf("expected managed export symlink to be ignored, got %s", match)
 	}
 }
 

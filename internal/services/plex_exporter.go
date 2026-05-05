@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Zerr0-C00L/StreamArr/internal/database"
@@ -324,6 +325,17 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 		}
 		if needsRefresh {
 			stats.staleLinkCount++
+			if removed, removeErr := p.removeManagedExportSymlink(cfg, cached.PlexExportPath); removeErr != nil {
+				stats.failedCount++
+				if serviceErr == nil {
+					serviceErr = removeErr
+				}
+				log.Printf("[PLEX-EXPORT] Failed to remove stale Plex symlink for %s: %v", label, removeErr)
+				continue
+			} else if removed {
+				stats.removedLinkCount++
+			}
+
 			message := truncateString(fmt.Sprintf("reset plex export after exported path went stale: %s", cached.PlexExportPath), 500)
 			if resetErr := p.streamCache.ResetPlexExportByCacheID(ctx, cached.ID, message); resetErr != nil {
 				stats.failedCount++
@@ -468,8 +480,13 @@ func (p *PlexExporter) resolveSourcePath(ctx context.Context, cfg *settings.Sett
 	log.Printf("[PLEX-EXPORT] RD torrent info for cache_id=%d: filename=%q status=%q links=%d",
 		cached.ID, info.Filename, info.Status, len(info.Links))
 
+	excludedSourceRoots := managedPlexExportRoots(cfg)
 	availableRoots := make([]string, 0, len(roots))
 	for _, root := range roots {
+		if pathAtOrWithinAnyRoot(root, excludedSourceRoots) {
+			log.Printf("[PLEX-EXPORT] Skipping Plex export root while resolving RD source: %s", root)
+			continue
+		}
 		if stat, statErr := os.Stat(root); statErr == nil && stat.IsDir() {
 			availableRoots = append(availableRoots, root)
 		}
@@ -503,14 +520,21 @@ func (p *PlexExporter) resolveSourcePath(ctx context.Context, cfg *settings.Sett
 		}
 
 		for _, candidate := range candidates {
+			if pathAtOrWithinAnyRoot(candidate, excludedSourceRoots) {
+				continue
+			}
 			resolved, ok := resolveCandidatePath(candidate, cached)
 			if ok {
+				if pathAtOrWithinAnyRoot(resolved, excludedSourceRoots) {
+					log.Printf("[PLEX-EXPORT] Ignoring source candidate inside Plex export root for cache_id=%d: %s", cached.ID, resolved)
+					continue
+				}
 				log.Printf("[PLEX-EXPORT] Matched direct candidate for cache_id=%d under %s: %s", cached.ID, root, resolved)
 				return resolved, nil
 			}
 		}
 
-		match, matchErr := findBestMountedMatch(root, info.Filename, cached, hintTitle, hintYear)
+		match, matchErr := findBestMountedMatch(root, info.Filename, cached, hintTitle, hintYear, excludedSourceRoots)
 		if matchErr != nil {
 			return "", matchErr
 		}
@@ -729,7 +753,7 @@ func resolveCandidatePath(path string, cached *models.CachedStream) (string, boo
 	return path, true
 }
 
-func findBestMountedMatch(root, torrentName string, cached *models.CachedStream, mediaTitle string, mediaYear int) (string, error) {
+func findBestMountedMatch(root, torrentName string, cached *models.CachedStream, mediaTitle string, mediaYear int, excludedRoots []string) (string, error) {
 	torrentBase := strings.ToLower(filepath.Base(strings.TrimSpace(torrentName)))
 	normalizedTorrentBase := normalizeMatchString(torrentBase)
 	normalizedMediaTitle := normalizeMatchString(mediaTitle)
@@ -749,6 +773,12 @@ func findBestMountedMatch(root, torrentName string, cached *models.CachedStream,
 	var matches []candidate
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			return nil
+		}
+		if pathAtOrWithinAnyRoot(path, excludedRoots) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		name := strings.ToLower(d.Name())
@@ -1105,12 +1135,16 @@ func plexExportPathNeedsRefresh(path string) (bool, error) {
 	}
 
 	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || isSymlinkLoopError(err) {
 			return true, nil
 		}
 		return false, err
 	}
 	return false, nil
+}
+
+func isSymlinkLoopError(err error) bool {
+	return errors.Is(err, syscall.ELOOP)
 }
 
 func seriesExportSymlinkNeedsRefresh(cached *models.CachedStream, exportPath, torrentName, mediaTitle string) (bool, error) {
@@ -1217,6 +1251,55 @@ func pathWithinRoot(path, root string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func pathAtOrWithinRoot(path, root string) bool {
+	path = strings.TrimSpace(path)
+	root = strings.TrimSpace(root)
+	if path == "" || root == "" {
+		return false
+	}
+
+	absPath, pathErr := filepath.Abs(filepath.Clean(path))
+	absRoot, rootErr := filepath.Abs(filepath.Clean(root))
+	if pathErr != nil || rootErr != nil {
+		return false
+	}
+
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
+func pathAtOrWithinAnyRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		if pathAtOrWithinRoot(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func managedPlexExportRoots(cfg *settings.Settings) []string {
+	if cfg == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var roots []string
+	for _, root := range []string{cfg.PlexExportMoviesPath, cfg.PlexExportShowsPath} {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "." || root == "" {
+			continue
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots
 }
 
 func ensureDir(path string) error {
