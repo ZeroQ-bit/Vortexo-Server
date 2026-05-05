@@ -1536,7 +1536,11 @@ func (h *Handler) ListSeries(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	idValue := mux.Vars(r)["id"]
+	if idValue == "" {
+		idValue = r.URL.Query().Get("id")
+	}
+	id, err := strconv.ParseInt(idValue, 10, 64)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid series ID")
 		return
@@ -1610,7 +1614,11 @@ func (h *Handler) AddSeries(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	idValue := mux.Vars(r)["id"]
+	if idValue == "" {
+		idValue = r.URL.Query().Get("id")
+	}
+	id, err := strconv.ParseInt(idValue, 10, 64)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid series ID")
 		return
@@ -1654,7 +1662,11 @@ func (h *Handler) UpdateSeries(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteSeries(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	idValue := mux.Vars(r)["id"]
+	if idValue == "" {
+		idValue = r.URL.Query().Get("id")
+	}
+	id, err := strconv.ParseInt(idValue, 10, 64)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid series ID")
 		return

@@ -850,9 +850,14 @@ func candidateMountRoots(primary string) []string {
 	add(primary)
 	switch primary {
 	case "/mnt/rd":
+		add("/mount/rd")
 		add("/mount")
 	case "/mount":
+		add("/mount/rd")
 		add("/mnt/rd")
+	case "/mount/rd":
+		add("/mnt/rd")
+		add("/mount")
 	}
 	return roots
 }

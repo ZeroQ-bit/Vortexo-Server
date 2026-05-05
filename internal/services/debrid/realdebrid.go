@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,19 @@ type RealDebrid struct {
 	apiKey     string
 	httpClient *http.Client
 	logger     *slog.Logger
+}
+
+type realDebridTorrentFile struct {
+	ID       int    `json:"id"`
+	Path     string `json:"path"`
+	Bytes    int64  `json:"bytes"`
+	Selected int    `json:"selected"`
+}
+
+type realDebridTorrentInfo struct {
+	ID     string                  `json:"id"`
+	Status string                  `json:"status"`
+	Files  []realDebridTorrentFile `json:"files"`
 }
 
 // NewRealDebrid creates a new Real-Debrid service instance
@@ -247,13 +261,19 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 		return "", fmt.Errorf("decode add magnet response: %w", err)
 	}
 
-	selectValue := "files=all"
-	if fileIndex > 0 {
-		selectValue = fmt.Sprintf("files=%d", fileIndex)
+	info, err := rd.waitForTorrentSelectionInfo(ctx, addResult.ID)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(strings.TrimSpace(info.Status), "downloaded") {
+		return addResult.ID, nil
 	}
 
+	selectForm := url.Values{}
+	selectForm.Set("files", selectFilesValue(fileIndex, info.Files))
+
 	selectURL := fmt.Sprintf("%s/torrents/selectFiles/%s", realDebridBaseURL, addResult.ID)
-	selectReq, err := http.NewRequestWithContext(ctx, "POST", selectURL, strings.NewReader(selectValue))
+	selectReq, err := http.NewRequestWithContext(ctx, "POST", selectURL, strings.NewReader(selectForm.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("create select files request: %w", err)
 	}
@@ -273,6 +293,79 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 	}
 
 	return addResult.ID, nil
+}
+
+func (rd *RealDebrid) getTorrentInfo(ctx context.Context, torrentID string) (*realDebridTorrentInfo, error) {
+	infoURL := fmt.Sprintf("%s/torrents/info/%s", realDebridBaseURL, torrentID)
+	req, err := http.NewRequestWithContext(ctx, "GET", infoURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create torrent info request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+rd.apiKey)
+
+	resp, err := rd.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get torrent info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get torrent info failed (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	var info realDebridTorrentInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("decode torrent info response: %w", err)
+	}
+	return &info, nil
+}
+
+func (rd *RealDebrid) waitForTorrentSelectionInfo(ctx context.Context, torrentID string) (*realDebridTorrentInfo, error) {
+	var lastInfo *realDebridTorrentInfo
+	var lastErr error
+
+	for attempt := 0; attempt < 8; attempt++ {
+		info, err := rd.getTorrentInfo(ctx, torrentID)
+		if err == nil {
+			lastInfo = info
+			status := strings.ToLower(strings.TrimSpace(info.Status))
+			if status == "downloaded" || len(info.Files) > 0 {
+				return info, nil
+			}
+			if status == "error" || status == "virus" || status == "dead" {
+				return nil, fmt.Errorf("torrent entered unselectable status %q", info.Status)
+			}
+		} else {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 500 * time.Millisecond):
+		}
+	}
+
+	if lastInfo != nil {
+		return lastInfo, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("torrent info unavailable for %s", torrentID)
+}
+
+func selectFilesValue(fileIndex int, files []realDebridTorrentFile) string {
+	if fileIndex > 0 {
+		for _, file := range files {
+			if file.ID == fileIndex {
+				return strconv.Itoa(fileIndex)
+			}
+		}
+	}
+	return "all"
 }
 
 // GetServiceName returns the service name

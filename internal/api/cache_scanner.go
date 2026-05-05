@@ -499,7 +499,7 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 					quality_score, resolution, hdr_type, audio_format, 
 					source_type, file_size_gb, codec, indexer
 				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-				ON CONFLICT (series_id, season, episode) 
+				ON CONFLICT (series_id, season, episode) WHERE series_id IS NOT NULL
 				DO UPDATE SET 
 					media_type = EXCLUDED.media_type,
 					media_id = EXCLUDED.media_id,

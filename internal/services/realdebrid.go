@@ -21,14 +21,14 @@ type RealDebridClient struct {
 }
 
 type rdTorrentInfo struct {
-	ID          string   `json:"id"`
-	Filename    string   `json:"filename"`
-	Hash        string   `json:"hash"`
-	Bytes       int64    `json:"bytes"`
-	Host        string   `json:"host"`
-	Status      string   `json:"status"`
-	Added       string   `json:"added"`
-	Links       []string `json:"links"`
+	ID       string   `json:"id"`
+	Filename string   `json:"filename"`
+	Hash     string   `json:"hash"`
+	Bytes    int64    `json:"bytes"`
+	Host     string   `json:"host"`
+	Status   string   `json:"status"`
+	Added    string   `json:"added"`
+	Links    []string `json:"links"`
 }
 
 type rdInstantAvailability struct {
@@ -72,7 +72,7 @@ func (c *RealDebridClient) CheckInstantAvailability(ctx context.Context, infoHas
 		batch := infoHashes[i:end]
 
 		endpoint := fmt.Sprintf("%s/torrents/instantAvailability/%s", rdBaseURL, strings.Join(batch, "/"))
-		
+
 		data, err := c.makeRequest(ctx, "GET", endpoint, nil, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check availability: %w", err)
@@ -105,7 +105,7 @@ func (c *RealDebridClient) CheckInstantAvailability(ctx context.Context, infoHas
 // AddMagnet adds a magnet link to Real-Debrid
 func (c *RealDebridClient) AddMagnet(ctx context.Context, magnetLink string) (string, error) {
 	endpoint := fmt.Sprintf("%s/torrents/addMagnet", rdBaseURL)
-	
+
 	params := url.Values{}
 	params.Set("magnet", magnetLink)
 
@@ -128,15 +128,19 @@ func (c *RealDebridClient) AddMagnet(ctx context.Context, magnetLink string) (st
 // SelectFiles selects all files from a torrent
 func (c *RealDebridClient) SelectFiles(ctx context.Context, torrentID string, fileIDs []int) error {
 	endpoint := fmt.Sprintf("%s/torrents/selectFiles/%s", rdBaseURL, torrentID)
-	
-	// Convert file IDs to comma-separated string
-	fileIDStrs := make([]string, len(fileIDs))
-	for i, id := range fileIDs {
-		fileIDStrs[i] = fmt.Sprintf("%d", id)
+
+	filesValue := "all"
+	if len(fileIDs) > 0 {
+		// Convert file IDs to comma-separated string
+		fileIDStrs := make([]string, len(fileIDs))
+		for i, id := range fileIDs {
+			fileIDStrs[i] = fmt.Sprintf("%d", id)
+		}
+		filesValue = strings.Join(fileIDStrs, ",")
 	}
-	
+
 	params := url.Values{}
-	params.Set("files", strings.Join(fileIDStrs, ","))
+	params.Set("files", filesValue)
 
 	_, err := c.makeRequest(ctx, "POST", endpoint, params, nil)
 	if err != nil {
@@ -149,7 +153,7 @@ func (c *RealDebridClient) SelectFiles(ctx context.Context, torrentID string, fi
 // GetTorrentInfo retrieves information about a torrent
 func (c *RealDebridClient) GetTorrentInfo(ctx context.Context, torrentID string) (*rdTorrentInfo, error) {
 	endpoint := fmt.Sprintf("%s/torrents/info/%s", rdBaseURL, torrentID)
-	
+
 	data, err := c.makeRequest(ctx, "GET", endpoint, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get torrent info: %w", err)
@@ -166,7 +170,7 @@ func (c *RealDebridClient) GetTorrentInfo(ctx context.Context, torrentID string)
 // UnrestrictLink converts a Real-Debrid link to a direct download link
 func (c *RealDebridClient) UnrestrictLink(ctx context.Context, link string) (*rdUnrestrictLink, error) {
 	endpoint := fmt.Sprintf("%s/unrestrict/link", rdBaseURL)
-	
+
 	params := url.Values{}
 	params.Set("link", link)
 
@@ -186,7 +190,6 @@ func (c *RealDebridClient) UnrestrictLink(ctx context.Context, link string) (*rd
 // GetStreamURL gets a direct streaming URL for a torrent
 func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (string, error) {
 
-	
 	// Build magnet link
 	magnetLink := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
 
@@ -223,7 +226,7 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 			return "", fmt.Errorf("failed to select files: %w", err)
 		}
 		time.Sleep(1 * time.Second)
-		
+
 		// Refresh info
 		info, err = c.GetTorrentInfo(ctx, torrentID)
 		if err != nil {
@@ -231,7 +234,7 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 			return "", fmt.Errorf("failed to refresh torrent info: %w", err)
 		}
 		fmt.Printf("[RD-DEBUG] After file selection - Status: %s, Links: %d\n", info.Status, len(info.Links))
-		
+
 		// If still not downloaded after selection, it's not cached - delete it
 		if info.Status != "downloaded" {
 			fmt.Printf("[RD-DEBUG] Torrent not instantly cached (status: %s), deleting...\n", info.Status)
@@ -260,7 +263,7 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 		fmt.Printf("[RD-DEBUG] Got download URL: %s\n", unrestricted.Download)
 		return unrestricted.Download, nil
 	}
-	
+
 	fmt.Printf("[RD-DEBUG] Got link URL: %s\n", unrestricted.Link)
 	return unrestricted.Link, nil
 }
@@ -268,7 +271,7 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 // DeleteTorrent removes a torrent from Real-Debrid
 func (c *RealDebridClient) DeleteTorrent(ctx context.Context, torrentID string) error {
 	endpoint := fmt.Sprintf("%s/torrents/delete/%s", rdBaseURL, torrentID)
-	
+
 	_, err := c.makeRequest(ctx, "DELETE", endpoint, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to delete torrent: %w", err)
@@ -281,14 +284,14 @@ func (c *RealDebridClient) DeleteTorrent(ctx context.Context, torrentID string) 
 func (c *RealDebridClient) makeRequest(ctx context.Context, method, endpoint string, params url.Values, body io.Reader) ([]byte, error) {
 	maxRetries := 3
 	var lastErr error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Exponential backoff for retries: 2s, 4s, 8s
 		if attempt > 0 {
 			backoff := time.Duration(1<<uint(attempt)) * time.Second
 			time.Sleep(backoff)
 		}
-		
+
 		reqURL := endpoint
 		if method == "GET" && params != nil {
 			reqURL = fmt.Sprintf("%s?%s", endpoint, params.Encode())
@@ -319,7 +322,7 @@ func (c *RealDebridClient) makeRequest(ctx context.Context, method, endpoint str
 
 		data, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		
+
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read response: %w", err)
 			continue
@@ -350,7 +353,7 @@ func (c *RealDebridClient) makeRequest(ctx context.Context, method, endpoint str
 // TestConnection tests the Real-Debrid API connection
 func (c *RealDebridClient) TestConnection(ctx context.Context) error {
 	endpoint := fmt.Sprintf("%s/user", rdBaseURL)
-	
+
 	_, err := c.makeRequest(ctx, "GET", endpoint, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Real-Debrid: %w", err)

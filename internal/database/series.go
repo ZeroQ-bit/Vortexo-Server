@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Zerr0-C00L/StreamArr/internal/models"
@@ -84,6 +85,151 @@ func (s *SeriesStore) Add(ctx context.Context, series *models.Series) error {
 	return nil
 }
 
+type seriesRowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanSeries(scanner seriesRowScanner) (*models.Series, error) {
+	var series models.Series
+	var metadataJSON []byte
+	var imdbID sql.NullString
+	var year sql.NullInt32
+	var lastChecked sql.NullTime
+	var preferredQuality sql.NullString
+
+	err := scanner.Scan(
+		&series.ID, &series.TMDBID, &imdbID, &series.Title, &year,
+		&series.Monitored, &series.CleanTitle, &metadataJSON,
+		&series.AddedAt, &lastChecked, &preferredQuality,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
+	}
+	if series.Metadata == nil {
+		series.Metadata = models.Metadata{}
+	}
+
+	if imdbID.Valid && imdbID.String != "" {
+		series.IMDBID = imdbID.String
+		series.Metadata["imdb_id"] = imdbID.String
+	}
+	if year.Valid {
+		series.Year = int(year.Int32)
+		series.Metadata["year"] = series.Year
+	}
+	if lastChecked.Valid {
+		series.LastChecked = &lastChecked.Time
+	}
+	if preferredQuality.Valid {
+		series.QualityProfile = preferredQuality.String
+	}
+
+	applySeriesMetadata(&series)
+	return &series, nil
+}
+
+func applySeriesMetadata(series *models.Series) {
+	if series == nil || series.Metadata == nil {
+		return
+	}
+
+	if value, ok := series.Metadata["original_title"].(string); ok {
+		series.OriginalTitle = value
+	}
+	if value, ok := series.Metadata["overview"].(string); ok {
+		series.Overview = value
+	}
+	if value, ok := series.Metadata["poster_path"].(string); ok {
+		series.PosterPath = value
+	}
+	if value, ok := series.Metadata["backdrop_path"].(string); ok {
+		series.BackdropPath = value
+	}
+	if value, ok := series.Metadata["first_air_date"].(string); ok {
+		if parsed, ok := parseMetadataTime(value); ok {
+			series.FirstAirDate = &parsed
+		}
+	}
+	if value, ok := series.Metadata["status"].(string); ok {
+		series.Status = value
+	}
+	if value := metadataInt(series.Metadata["seasons"]); value > 0 {
+		series.Seasons = value
+	}
+	if value := metadataInt(series.Metadata["total_episodes"]); value > 0 {
+		series.TotalEpisodes = value
+	}
+	if value, ok := series.Metadata["genres"].([]interface{}); ok {
+		series.Genres = make([]string, 0, len(value))
+		for _, genre := range value {
+			if text, ok := genre.(string); ok {
+				series.Genres = append(series.Genres, text)
+			}
+		}
+	}
+	if value := metadataFloat(series.Metadata["vote_average"]); value > 0 {
+		series.VoteAverage = value
+	}
+	if value := metadataInt(series.Metadata["vote_count"]); value > 0 {
+		series.VoteCount = value
+	}
+	if value, ok := series.Metadata["original_language"].(string); ok {
+		series.OriginalLang = value
+	}
+	if value, ok := series.Metadata["quality_profile"].(string); ok && series.QualityProfile == "" {
+		series.QualityProfile = value
+	}
+	if value, ok := series.Metadata["search_status"].(string); ok {
+		series.SearchStatus = value
+	}
+}
+
+func metadataInt(value interface{}) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		parsed, _ := strconv.Atoi(typed)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func metadataFloat(value interface{}) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case string:
+		parsed, _ := strconv.ParseFloat(typed, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func parseMetadataTime(value string) (time.Time, bool) {
+	formats := []string{time.RFC3339, "2006-01-02", "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05Z"}
+	for _, format := range formats {
+		if parsed, err := time.Parse(format, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // Get retrieves a series by ID
 func (s *SeriesStore) Get(ctx context.Context, id int64) (*models.Series, error) {
 	query := `
@@ -93,19 +239,7 @@ func (s *SeriesStore) Get(ctx context.Context, id int64) (*models.Series, error)
 		WHERE id = $1
 	`
 
-	var series models.Series
-	var metadataJSON []byte
-	var imdbID sql.NullString
-	var year sql.NullInt32
-	var lastChecked sql.NullTime
-	var preferredQuality sql.NullString
-
-	err := s.db.QueryRowContext(ctx, query, id).Scan(
-		&series.ID, &series.TMDBID, &imdbID, &series.Title, &year,
-		&series.Monitored, &series.CleanTitle, &metadataJSON,
-		&series.AddedAt, &lastChecked, &preferredQuality,
-	)
-
+	series, err := scanSeries(s.db.QueryRowContext(ctx, query, id))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("series not found")
 	}
@@ -113,66 +247,19 @@ func (s *SeriesStore) Get(ctx context.Context, id int64) (*models.Series, error)
 		return nil, fmt.Errorf("failed to get series: %w", err)
 	}
 
-	if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-	}
-
-	// Set IMDB ID field from database column
-	if imdbID.Valid && imdbID.String != "" {
-		series.IMDBID = imdbID.String
-		series.Metadata["imdb_id"] = imdbID.String
-	}
-
-	// Extract additional fields from metadata if available
-	if title, ok := series.Metadata["title"].(string); ok {
-		series.Title = title
-	}
-	if overview, ok := series.Metadata["overview"].(string); ok {
-		series.Overview = overview
-	}
-	if posterPath, ok := series.Metadata["poster_path"].(string); ok {
-		series.PosterPath = posterPath
-	}
-	if backdropPath, ok := series.Metadata["backdrop_path"].(string); ok {
-		series.BackdropPath = backdropPath
-	}
-	if seasons, ok := series.Metadata["seasons"].(float64); ok {
-		series.Seasons = int(seasons)
-	}
-
-	if lastChecked.Valid {
-		series.LastChecked = &lastChecked.Time
-	}
-	if preferredQuality.Valid {
-		series.QualityProfile = preferredQuality.String
-	}
-
-	return &series, nil
+	return series, nil
 }
 
 // GetByTMDBID retrieves a series by TMDB ID
 func (s *SeriesStore) GetByTMDBID(ctx context.Context, tmdbID int) (*models.Series, error) {
 	query := `
-		SELECT id, tmdb_id, title, original_title, overview, poster_path, backdrop_path,
-			first_air_date, status, seasons, total_episodes, genres, metadata,
-			monitored, quality_profile, search_status, last_checked,
-			created_at, updated_at, added_at
+		SELECT id, tmdb_id, imdb_id, title, year, monitored, clean_title,
+			metadata, added_at, last_checked, preferred_quality
 		FROM library_series
 		WHERE tmdb_id = $1
 	`
 
-	var series models.Series
-	var metadataJSON []byte
-
-	err := s.db.QueryRowContext(ctx, query, tmdbID).Scan(
-		&series.ID, &series.TMDBID, &series.Title, &series.OriginalTitle,
-		&series.Overview, &series.PosterPath, &series.BackdropPath,
-		&series.FirstAirDate, &series.Status, &series.Seasons, &series.TotalEpisodes,
-		&series.Genres, &metadataJSON, &series.Monitored, &series.QualityProfile,
-		&series.SearchStatus, &series.LastChecked, &series.CreatedAt,
-		&series.UpdatedAt, &series.AddedAt,
-	)
-
+	series, err := scanSeries(s.db.QueryRowContext(ctx, query, tmdbID))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("series not found")
 	}
@@ -180,11 +267,7 @@ func (s *SeriesStore) GetByTMDBID(ctx context.Context, tmdbID int) (*models.Seri
 		return nil, fmt.Errorf("failed to get series: %w", err)
 	}
 
-	if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-	}
-
-	return &series, nil
+	return series, nil
 }
 
 // GetByIMDBID retrieves a series by IMDB ID
@@ -196,19 +279,7 @@ func (s *SeriesStore) GetByIMDBID(ctx context.Context, imdbID string) (*models.S
 		WHERE imdb_id = $1
 	`
 
-	var series models.Series
-	var metadataJSON []byte
-	var dbImdbID sql.NullString
-	var year sql.NullInt32
-	var lastChecked sql.NullTime
-	var preferredQuality sql.NullString
-
-	err := s.db.QueryRowContext(ctx, query, imdbID).Scan(
-		&series.ID, &series.TMDBID, &dbImdbID, &series.Title, &year,
-		&series.Monitored, &series.CleanTitle, &metadataJSON,
-		&series.AddedAt, &lastChecked, &preferredQuality,
-	)
-
+	series, err := scanSeries(s.db.QueryRowContext(ctx, query, imdbID))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("series not found")
 	}
@@ -216,58 +287,14 @@ func (s *SeriesStore) GetByIMDBID(ctx context.Context, imdbID string) (*models.S
 		return nil, fmt.Errorf("failed to get series: %w", err)
 	}
 
-	if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-	}
-
-	// Set IMDB ID field from database column
-	if dbImdbID.Valid && dbImdbID.String != "" {
-		series.IMDBID = dbImdbID.String
-	}
-
-	// Parse metadata fields
-	if series.Metadata != nil {
-		if ot, ok := series.Metadata["original_title"].(string); ok {
-			series.OriginalTitle = ot
-		}
-		if ov, ok := series.Metadata["overview"].(string); ok {
-			series.Overview = ov
-		}
-		if pp, ok := series.Metadata["poster_path"].(string); ok {
-			series.PosterPath = pp
-		}
-		if bp, ok := series.Metadata["backdrop_path"].(string); ok {
-			series.BackdropPath = bp
-		}
-		if st, ok := series.Metadata["status"].(string); ok {
-			series.Status = st
-		}
-		if pq, ok := series.Metadata["quality_profile"].(string); ok {
-			series.QualityProfile = pq
-		}
-	}
-
-	if dbImdbID.Valid {
-		imdbStr := dbImdbID.String
-		series.Metadata["imdb_id"] = imdbStr
-	}
-	if year.Valid {
-		series.Metadata["year"] = int(year.Int32)
-	}
-	if lastChecked.Valid {
-		series.LastChecked = &lastChecked.Time
-	}
-	if preferredQuality.Valid {
-		series.QualityProfile = preferredQuality.String
-	}
-
-	return &series, nil
+	return series, nil
 }
 
 // List returns paginated series with optional filtering
 func (s *SeriesStore) List(ctx context.Context, offset, limit int, monitored *bool) ([]*models.Series, error) {
 	query := `
-		SELECT id, tmdb_id, imdb_id, title, year, monitored, metadata, added_at, last_checked, preferred_quality
+		SELECT id, tmdb_id, imdb_id, title, year, monitored, clean_title,
+			metadata, added_at, last_checked, preferred_quality
 		FROM library_series
 		WHERE ($1::boolean IS NULL OR monitored = $1)
 		ORDER BY added_at DESC
@@ -282,51 +309,11 @@ func (s *SeriesStore) List(ctx context.Context, offset, limit int, monitored *bo
 
 	var seriesList []*models.Series
 	for rows.Next() {
-		var series models.Series
-		var metadataJSON []byte
-		var imdbID sql.NullString
-		var year sql.NullInt32
-		var lastChecked sql.NullTime
-
-		err := rows.Scan(
-			&series.ID, &series.TMDBID, &imdbID, &series.Title, &year,
-			&series.Monitored, &metadataJSON, &series.AddedAt, &lastChecked, &series.QualityProfile,
-		)
+		series, err := scanSeries(rows)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan series: %w", err)
 		}
-
-		if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-		}
-
-		// Set IMDB ID field from database column
-		if imdbID.Valid && imdbID.String != "" {
-			series.IMDBID = imdbID.String
-		}
-
-		// Set Year field from database column
-		if year.Valid {
-			series.Year = int(year.Int32)
-		}
-
-		// Set lastChecked
-		if lastChecked.Valid {
-			series.LastChecked = &lastChecked.Time
-		}
-
-		// Extract fields from metadata if present
-		if posterPath, ok := series.Metadata["poster_path"].(string); ok {
-			series.PosterPath = posterPath
-		}
-		if backdropPath, ok := series.Metadata["backdrop_path"].(string); ok {
-			series.BackdropPath = backdropPath
-		}
-		if overview, ok := series.Metadata["overview"].(string); ok {
-			series.Overview = overview
-		}
-
-		seriesList = append(seriesList, &series)
+		seriesList = append(seriesList, series)
 	}
 
 	return seriesList, nil
@@ -335,13 +322,11 @@ func (s *SeriesStore) List(ctx context.Context, offset, limit int, monitored *bo
 // Search performs full-text search on series
 func (s *SeriesStore) Search(ctx context.Context, query string, limit int) ([]*models.Series, error) {
 	searchQuery := `
-		SELECT id, tmdb_id, title, original_title, overview, poster_path, backdrop_path,
-			first_air_date, status, seasons, total_episodes, genres, metadata,
-			monitored, quality_profile, search_status, last_checked,
-			created_at, updated_at, added_at
+		SELECT id, tmdb_id, imdb_id, title, year, monitored, clean_title,
+			metadata, added_at, last_checked, preferred_quality
 		FROM library_series
-		WHERE search_vector @@ plainto_tsquery('english', $1)
-		ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC
+		WHERE title_vector @@ plainto_tsquery('english', $1)
+		ORDER BY ts_rank(title_vector, plainto_tsquery('english', $1)) DESC
 		LIMIT $2
 	`
 
@@ -353,26 +338,11 @@ func (s *SeriesStore) Search(ctx context.Context, query string, limit int) ([]*m
 
 	var seriesList []*models.Series
 	for rows.Next() {
-		var series models.Series
-		var metadataJSON []byte
-
-		err := rows.Scan(
-			&series.ID, &series.TMDBID, &series.Title, &series.OriginalTitle,
-			&series.Overview, &series.PosterPath, &series.BackdropPath,
-			&series.FirstAirDate, &series.Status, &series.Seasons, &series.TotalEpisodes,
-			&series.Genres, &metadataJSON, &series.Monitored, &series.QualityProfile,
-			&series.SearchStatus, &series.LastChecked, &series.CreatedAt,
-			&series.UpdatedAt, &series.AddedAt,
-		)
+		series, err := scanSeries(rows)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan series: %w", err)
 		}
-
-		if err := json.Unmarshal(metadataJSON, &series.Metadata); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-		}
-
-		seriesList = append(seriesList, &series)
+		seriesList = append(seriesList, series)
 	}
 
 	return seriesList, nil
@@ -380,6 +350,16 @@ func (s *SeriesStore) Search(ctx context.Context, query string, limit int) ([]*m
 
 // Update updates an existing series
 func (s *SeriesStore) Update(ctx context.Context, series *models.Series) error {
+	if series.Metadata == nil {
+		series.Metadata = models.Metadata{}
+	}
+	series.Metadata["quality_profile"] = series.QualityProfile
+	if series.SearchStatus != "" {
+		series.Metadata["search_status"] = series.SearchStatus
+	} else {
+		delete(series.Metadata, "search_status")
+	}
+
 	metadataJSON, err := json.Marshal(series.Metadata)
 	if err != nil {
 		return fmt.Errorf("failed to marshal metadata: %w", err)
@@ -387,21 +367,16 @@ func (s *SeriesStore) Update(ctx context.Context, series *models.Series) error {
 
 	query := `
 		UPDATE library_series
-		SET title = $1, original_title = $2, overview = $3, poster_path = $4,
-			backdrop_path = $5, first_air_date = $6, status = $7, seasons = $8,
-			total_episodes = $9, genres = $10, metadata = $11, monitored = $12,
-			quality_profile = $13, search_status = $14, last_checked = $15,
-			updated_at = $16
-		WHERE id = $17
+		SET monitored = $1,
+			preferred_quality = $2,
+			metadata = $3,
+			last_checked = $4
+		WHERE id = $5
 	`
 
 	result, err := s.db.ExecContext(
 		ctx, query,
-		series.Title, series.OriginalTitle, series.Overview, series.PosterPath,
-		series.BackdropPath, series.FirstAirDate, series.Status, series.Seasons,
-		series.TotalEpisodes, series.Genres, metadataJSON, series.Monitored,
-		series.QualityProfile, series.SearchStatus, series.LastChecked,
-		time.Now(), series.ID,
+		series.Monitored, series.QualityProfile, metadataJSON, time.Now(), series.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update series: %w", err)
@@ -448,12 +423,13 @@ func (s *SeriesStore) GetMonitored(ctx context.Context) ([]*models.Series, error
 func (s *SeriesStore) UpdateSearchStatus(ctx context.Context, id int64, status string) error {
 	query := `
 		UPDATE library_series
-		SET search_status = $1, last_checked = $2, updated_at = $3
-		WHERE id = $4
+		SET metadata = jsonb_set(metadata, '{search_status}', to_jsonb($1::text), true),
+		    last_checked = $2
+		WHERE id = $3
 	`
 
 	now := time.Now()
-	result, err := s.db.ExecContext(ctx, query, status, now, now, id)
+	result, err := s.db.ExecContext(ctx, query, status, now, id)
 	if err != nil {
 		return fmt.Errorf("failed to update search status: %w", err)
 	}
@@ -488,15 +464,30 @@ func (s *SeriesStore) Count(ctx context.Context, monitored *bool) (int, error) {
 
 // CountEpisodes returns the total number of episodes across all series
 func (s *SeriesStore) CountEpisodes(ctx context.Context) (int, error) {
-	var count sql.NullInt64
-	err := s.db.QueryRowContext(ctx, "SELECT SUM(total_episodes) FROM library_series").Scan(&count)
+	query := `
+		WITH metadata_total AS (
+			SELECT COALESCE(SUM(
+				CASE
+					WHEN metadata->>'total_episodes' ~ '^[0-9]+$'
+					THEN (metadata->>'total_episodes')::integer
+					ELSE 0
+				END
+			), 0) AS count
+			FROM library_series
+		), episode_total AS (
+			SELECT COUNT(*) AS count
+			FROM library_episodes
+		)
+		SELECT GREATEST(metadata_total.count, episode_total.count)
+		FROM metadata_total, episode_total
+	`
+
+	var count int
+	err := s.db.QueryRowContext(ctx, query).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
-	if !count.Valid {
-		return 0, nil
-	}
-	return int(count.Int64), nil
+	return count, nil
 }
 
 // DeleteAll removes all series from the library
@@ -509,7 +500,7 @@ func (s *SeriesStore) DeleteAll(ctx context.Context) error {
 func (s *SeriesStore) ResetStatus(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE library_series 
-		SET search_status = '',
+		SET metadata = metadata - 'search_status',
 		    last_checked = NULL
 	`)
 	return err

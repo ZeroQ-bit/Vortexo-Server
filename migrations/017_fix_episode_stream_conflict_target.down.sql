@@ -1,0 +1,2 @@
+-- Intentionally left in place on rollback; this index is required by the
+-- series stream cache upsert path.
