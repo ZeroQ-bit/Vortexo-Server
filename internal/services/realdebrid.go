@@ -189,6 +189,10 @@ func (c *RealDebridClient) UnrestrictLink(ctx context.Context, link string) (*rd
 
 // GetStreamURL gets a direct streaming URL for a torrent
 func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (string, error) {
+	infoHash = normalizeRealDebridHash(infoHash)
+	if !isValidRealDebridHash(infoHash) {
+		return "", fmt.Errorf("invalid torrent hash %q", truncateString(infoHash, 12))
+	}
 
 	// Build magnet link
 	magnetLink := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
@@ -360,4 +364,24 @@ func (c *RealDebridClient) TestConnection(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func normalizeRealDebridHash(hash string) string {
+	hash = strings.TrimSpace(hash)
+	hash = strings.TrimPrefix(strings.ToLower(hash), "urn:btih:")
+	hash = strings.TrimPrefix(hash, "btih:")
+	return hash
+}
+
+func isValidRealDebridHash(hash string) bool {
+	hash = normalizeRealDebridHash(hash)
+	if len(hash) != 40 {
+		return false
+	}
+	for _, c := range hash {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

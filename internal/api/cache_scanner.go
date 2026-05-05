@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,15 +264,12 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 			if bestStream != nil {
 				// Extract hash from URL if needed
 				hash := bestStream.InfoHash
-				if hash == "" && bestStream.URL != "" {
-					parts := []rune(bestStream.URL)
-					for i := 0; i < len(parts)-40; i++ {
-						candidate := string(parts[i : i+40])
-						if len(candidate) == 40 {
-							hash = candidate
-							break
-						}
-					}
+				if !isValidHash(hash) && bestStream.URL != "" {
+					hash = extractHashFromURL(bestStream.URL)
+				}
+				if !isValidHash(hash) {
+					log.Printf("[CACHE-SCANNER] Skipping cache for %s because no valid torrent hash was found in source %q", movie.Title, bestStream.Source)
+					continue
 				}
 
 				stream := models.TorrentStream{
@@ -479,6 +477,10 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 			if !isValidHash(hash) && bestStream.URL != "" {
 				hash = extractHashFromURL(bestStream.URL)
 			}
+			if !isValidHash(hash) {
+				log.Printf("[CACHE-SCANNER] Skipping cache for %s S%02dE%02d because no valid torrent hash was found in source %q", s.Title, season, episode, bestStream.Source)
+				continue
+			}
 
 			// Parse quality details
 			parsed := cs.streamService.ParseStreamFromTorrentName(bestStream.Title, hash, bestStream.Source, 0)
@@ -579,8 +581,9 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 	return scanned, cached, errors
 }
 
-// isValidHash validates that a string is a 40-character hex hash
+// isValidHash validates that a string is a 40-character hex v1 torrent hash.
 func isValidHash(hash string) bool {
+	hash = normalizeTorrentHash(hash)
 	if len(hash) != 40 {
 		return false
 	}
@@ -590,6 +593,13 @@ func isValidHash(hash string) bool {
 		}
 	}
 	return true
+}
+
+func normalizeTorrentHash(hash string) string {
+	hash = strings.TrimSpace(hash)
+	hash = strings.TrimPrefix(strings.ToLower(hash), "urn:btih:")
+	hash = strings.TrimPrefix(hash, "btih:")
+	return hash
 }
 
 // CleanupUnreleasedCache removes cached streams for unreleased movies
@@ -632,8 +642,12 @@ func (cs *CacheScanner) shouldAutoAddBestStreamsToRealDebrid() bool {
 }
 
 func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, label, hash string, fileIdx int, markAdded func(string) error) error {
-	if !cs.shouldAutoAddBestStreamsToRealDebrid() || strings.TrimSpace(hash) == "" {
+	hash = normalizeTorrentHash(hash)
+	if !cs.shouldAutoAddBestStreamsToRealDebrid() || hash == "" {
 		return nil
+	}
+	if !isValidHash(hash) {
+		return fmt.Errorf("invalid torrent hash %q", truncateForLog(hash, 12))
 	}
 
 	torrentID, err := cs.debridService.AddToLibrary(ctx, hash, fileIdx)
@@ -705,15 +719,16 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 		syncedThisBatch := 0
 		for _, stream := range pending {
 			label := stream.MediaType + " " + strconv.Itoa(stream.MediaID)
-			hash := stream.StreamHash
-			if !isValidHash(hash) {
-				hash = extractHashFromURL(stream.StreamURL)
-				if isValidHash(hash) {
-					log.Printf("[CACHE-SCANNER] Recovered valid hash from stream URL for %s", label)
-				}
+			hash := normalizeTorrentHash(stream.StreamHash)
+			if safeHash := extractHashFromURL(stream.StreamURL); isValidHash(safeHash) && safeHash != hash {
+				hash = safeHash
+				log.Printf("[CACHE-SCANNER] Recovered valid hash from stream URL for %s", label)
 			}
 			if !isValidHash(hash) {
 				log.Printf("[CACHE-SCANNER] Skipping cached stream %s %d because no valid torrent hash is available", stream.MediaType, stream.MediaID)
+				if markErr := cs.cacheStore.MarkUnavailableByCacheID(ctx, stream.ID, "retired cached stream with no valid torrent hash"); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to retire cached stream %s %d with invalid hash: %v", stream.MediaType, stream.MediaID, markErr)
+				}
 				continue
 			}
 			fileIdx := extractFileIndexFromStreamURL(stream.StreamURL)
@@ -733,6 +748,15 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 					services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), "Paused by Real-Debrid rate limit")
 					time.Sleep(5 * time.Second)
 					return nil
+				}
+				if isRealDebridInvalidMagnetError(err) {
+					message := fmt.Sprintf("retired invalid magnet source: %v", err)
+					if markErr := cs.cacheStore.MarkUnavailableByCacheID(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
+						log.Printf("[CACHE-SCANNER] Failed to retire invalid magnet source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
+					} else {
+						log.Printf("[CACHE-SCANNER] Retired invalid magnet source %s %d after Real-Debrid rejected it", stream.MediaType, stream.MediaID)
+					}
+					continue
 				}
 				continue
 			}
@@ -766,6 +790,16 @@ func isRealDebridDuplicateError(err error) bool {
 		strings.Contains(msg, "active torrent")
 }
 
+func isRealDebridInvalidMagnetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid magnet") ||
+		strings.Contains(msg, "magnet_error") ||
+		strings.Contains(msg, "invalid torrent hash")
+}
+
 func twoDigit(value int) string {
 	if value < 10 {
 		return "0" + strconv.Itoa(value)
@@ -797,27 +831,114 @@ func extractFileIndexFromStreamURL(streamURL string) int {
 }
 
 func extractHashFromURL(raw string) string {
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
+	raw = strings.TrimSpace(raw)
+	if isValidHash(raw) {
+		return normalizeTorrentHash(raw)
+	}
+
+	if parsed, err := url.Parse(raw); err == nil {
+		for _, key := range []string{"xt", "btih", "infohash", "info_hash", "hash"} {
+			for _, value := range parsed.Query()[key] {
+				if hash := hashFromValue(value); hash != "" {
+					return hash
+				}
+			}
+		}
+	}
+
+	if hash := hashFromValue(raw); hash != "" {
+		return hash
+	}
+
+	tokens := tokenizeURLForHash(raw)
+	for i, token := range tokens {
+		hash := normalizeTorrentHash(token)
+		if !isValidHash(hash) || !hasSafeHashContext(tokens, i) {
+			continue
+		}
+		return hash
+	}
+
+	return ""
+}
+
+func hashFromValue(value string) string {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	if idx := strings.Index(lower, "urn:btih:"); idx >= 0 {
+		start := idx + len("urn:btih:")
+		if start+40 <= len(value) {
+			hash := value[start : start+40]
+			if isValidHash(hash) {
+				return normalizeTorrentHash(hash)
+			}
+		}
+	}
+	if isValidHash(value) {
+		return normalizeTorrentHash(value)
+	}
+	return ""
+}
+
+func tokenizeURLForHash(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
 		switch r {
-		case '/', '?', '&', '=', ':', '.', '-', '_':
+		case '/', '?', '&', '=', ':', '#', '|', ',', ';':
 			return true
 		default:
 			return false
 		}
 	})
-	for _, part := range parts {
-		if isValidHash(part) {
-			return part
-		}
-	}
+}
 
-	runes := []rune(raw)
-	for i := 0; i <= len(runes)-40; i++ {
-		candidate := string(runes[i : i+40])
-		if isValidHash(candidate) {
-			return candidate
-		}
+func hasSafeHashContext(tokens []string, index int) bool {
+	if index < 0 || index >= len(tokens) {
+		return false
 	}
+	if index > 0 && isHashContextToken(tokens[index-1]) {
+		return true
+	}
+	if index > 1 && isHashContextToken(tokens[index-2]) {
+		return true
+	}
+	if index+1 < len(tokens) && (strings.EqualFold(tokens[index+1], "null") || isPositiveInt(tokens[index+1])) {
+		return true
+	}
+	if index+2 < len(tokens) && strings.EqualFold(tokens[index+1], "null") && isPositiveInt(tokens[index+2]) {
+		return true
+	}
+	if index >= 3 && strings.EqualFold(tokens[index-3], "resolve") && isDebridToken(tokens[index-2]) {
+		return true
+	}
+	return false
+}
 
-	return ""
+func isHashContextToken(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "btih", "infohash", "info_hash", "hash", "torrent_hash", "magnet":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDebridToken(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "realdebrid", "real-debrid", "rd", "alldebrid", "all-debrid", "premiumize", "debridlink", "debrid-link":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPositiveInt(value string) bool {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	return err == nil && parsed > 0
+}
+
+func truncateForLog(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }

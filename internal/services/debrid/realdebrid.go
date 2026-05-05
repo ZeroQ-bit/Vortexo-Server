@@ -230,6 +230,11 @@ func (rd *RealDebrid) GetAvailableFiles(ctx context.Context, hash string) ([]Tor
 // resolving a playback URL. When a file index is provided, we select just that
 // file; otherwise we select all files so the torrent is usable later.
 func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex int) (string, error) {
+	hash = normalizeTorrentHash(hash)
+	if !isValidTorrentHash(hash) {
+		return "", fmt.Errorf("invalid torrent hash %q", truncateForLog(hash, 12))
+	}
+
 	magnetURL := fmt.Sprintf("magnet:?xt=urn:btih:%s", hash)
 	form := url.Values{}
 	form.Set("magnet", magnetURL)
@@ -263,10 +268,15 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 
 	info, err := rd.waitForTorrentSelectionInfo(ctx, addResult.ID)
 	if err != nil {
+		_ = rd.deleteTorrent(ctx, addResult.ID)
 		return "", err
 	}
 	if strings.EqualFold(strings.TrimSpace(info.Status), "downloaded") {
 		return addResult.ID, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(info.Status), "waiting_files_selection") && len(info.Files) == 0 {
+		_ = rd.deleteTorrent(ctx, addResult.ID)
+		return "", fmt.Errorf("torrent entered unselectable status %q", info.Status)
 	}
 
 	selectForm := url.Values{}
@@ -283,16 +293,43 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 
 	selectResp, err := rd.httpClient.Do(selectReq)
 	if err != nil {
+		_ = rd.deleteTorrent(ctx, addResult.ID)
 		return "", fmt.Errorf("select files: %w", err)
 	}
 	defer selectResp.Body.Close()
 
 	if selectResp.StatusCode != http.StatusNoContent && selectResp.StatusCode != http.StatusCreated && selectResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(selectResp.Body)
+		_ = rd.deleteTorrent(ctx, addResult.ID)
 		return "", fmt.Errorf("select files failed (status %d): %s", selectResp.StatusCode, string(body))
 	}
 
 	return addResult.ID, nil
+}
+
+func (rd *RealDebrid) deleteTorrent(ctx context.Context, torrentID string) error {
+	if strings.TrimSpace(torrentID) == "" {
+		return nil
+	}
+
+	deleteURL := fmt.Sprintf("%s/torrents/delete/%s", realDebridBaseURL, torrentID)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", deleteURL, nil)
+	if err != nil {
+		return fmt.Errorf("create delete torrent request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+rd.apiKey)
+
+	resp, err := rd.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete torrent: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete torrent failed (status %d): %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 func (rd *RealDebrid) getTorrentInfo(ctx context.Context, torrentID string) (*realDebridTorrentInfo, error) {
@@ -334,7 +371,7 @@ func (rd *RealDebrid) waitForTorrentSelectionInfo(ctx context.Context, torrentID
 			if status == "downloaded" || len(info.Files) > 0 {
 				return info, nil
 			}
-			if status == "error" || status == "virus" || status == "dead" {
+			if isTerminalTorrentStatus(status) {
 				return nil, fmt.Errorf("torrent entered unselectable status %q", info.Status)
 			}
 		} else {
@@ -355,6 +392,42 @@ func (rd *RealDebrid) waitForTorrentSelectionInfo(ctx context.Context, torrentID
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("torrent info unavailable for %s", torrentID)
+}
+
+func isTerminalTorrentStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "error", "virus", "dead", "magnet_error":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeTorrentHash(hash string) string {
+	hash = strings.TrimSpace(hash)
+	hash = strings.TrimPrefix(strings.ToLower(hash), "urn:btih:")
+	hash = strings.TrimPrefix(hash, "btih:")
+	return hash
+}
+
+func isValidTorrentHash(hash string) bool {
+	hash = normalizeTorrentHash(hash)
+	if len(hash) != 40 {
+		return false
+	}
+	for _, c := range hash {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func truncateForLog(value string, maxLen int) string {
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }
 
 func selectFilesValue(fileIndex int, files []realDebridTorrentFile) string {

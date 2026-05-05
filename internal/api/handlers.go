@@ -1164,76 +1164,72 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 			// For Torrentio streams, Title contains the actual filename (set in stremio_generic.go)
 			// Name contains the formatted display text like "[RD+] Torrentio\n1080p"
 			torrentName := bestCached.Title
-			if hash == "" && bestCached.URL != "" {
-				// Torrentio URLs contain the hash in the path
-				// Example: /resolve/realdebrid/APIKEY/HASH/null/1/filename.mp4
-				parts := strings.Split(bestCached.URL, "/")
-				for _, part := range parts {
-					if len(part) == 40 { // Torrent hashes are 40 chars
-						hash = part
-						break
-					}
-				}
+			if !isValidHash(hash) && bestCached.URL != "" {
+				hash = extractHashFromURL(bestCached.URL)
 			}
+			if !isValidHash(hash) {
+				log.Printf("[CACHE-PHASE1] Skipping cache for movie %d because stream source %q did not include a valid torrent hash", id, bestCached.Source)
+			} else {
 
-			log.Printf("[CACHE-PHASE1] Processing stream for caching: hash=%s, torrentName=%s",
-				hash, torrentName)
-			// Convert to Phase 1 format
-			phase1Stream := models.TorrentStream{
-				Hash:        hash,
-				Title:       bestCached.Name, // Use Name for display title
-				TorrentName: torrentName,     // Use Title (which contains actual filename) for scoring
-				Resolution:  bestCached.Quality,
-				SizeGB:      float64(bestCached.Size) / (1024 * 1024 * 1024),
-				Seeders:     bestCached.Seeders,
-				Indexer:     bestCached.Source,
-			}
-
-			// Score it using Phase 1 quality algorithm
-			if svc, ok := h.streamService.(*streams.StreamService); ok {
-				log.Printf("[CACHE-PHASE1] Calling ParseStreamFromTorrentName with name='%s', hash='%s', indexer='%s'",
-					phase1Stream.TorrentName, phase1Stream.Hash, phase1Stream.Indexer)
-				scoredStream := svc.ParseStreamFromTorrentName(
-					phase1Stream.TorrentName,
-					phase1Stream.Hash,
-					phase1Stream.Indexer,
-					phase1Stream.Seeders,
-				)
-
-				// Calculate the actual quality score
-				quality := streams.StreamQuality{
-					Resolution:  scoredStream.Resolution,
-					HDRType:     scoredStream.HDRType,
-					AudioFormat: scoredStream.AudioFormat,
-					Source:      scoredStream.Source,
-					Codec:       scoredStream.Codec,
-					SizeGB:      scoredStream.SizeGB,
-					Seeders:     scoredStream.Seeders,
+				log.Printf("[CACHE-PHASE1] Processing stream for caching: hash=%s, torrentName=%s",
+					hash, torrentName)
+				// Convert to Phase 1 format
+				phase1Stream := models.TorrentStream{
+					Hash:        hash,
+					Title:       bestCached.Name, // Use Name for display title
+					TorrentName: torrentName,     // Use Title (which contains actual filename) for scoring
+					Resolution:  bestCached.Quality,
+					SizeGB:      float64(bestCached.Size) / (1024 * 1024 * 1024),
+					Seeders:     bestCached.Seeders,
+					Indexer:     bestCached.Source,
 				}
-				scoreBreakdown := streams.CalculateScore(quality)
-				scoredStream.QualityScore = scoreBreakdown.TotalScore
 
-				log.Printf("[CACHE-PHASE1] Scoring result: quality=%d, res=%s, hdr=%s, audio=%s, source=%s, codec=%s",
-					scoredStream.QualityScore, scoredStream.Resolution, scoredStream.HDRType,
-					scoredStream.AudioFormat, scoredStream.Source, scoredStream.Codec)
-				phase1Stream.QualityScore = scoredStream.QualityScore
-				phase1Stream.Resolution = scoredStream.Resolution
-				phase1Stream.HDRType = scoredStream.HDRType
-				phase1Stream.AudioFormat = scoredStream.AudioFormat
-				phase1Stream.Source = scoredStream.Source
-				phase1Stream.Codec = scoredStream.Codec
+				// Score it using Phase 1 quality algorithm
+				if svc, ok := h.streamService.(*streams.StreamService); ok {
+					log.Printf("[CACHE-PHASE1] Calling ParseStreamFromTorrentName with name='%s', hash='%s', indexer='%s'",
+						phase1Stream.TorrentName, phase1Stream.Hash, phase1Stream.Indexer)
+					scoredStream := svc.ParseStreamFromTorrentName(
+						phase1Stream.TorrentName,
+						phase1Stream.Hash,
+						phase1Stream.Indexer,
+						phase1Stream.Seeders,
+					)
 
-				// Cache it with the stream URL (async to not block response)
-				go func() {
-					cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					if err := h.streamCacheStore.CacheStream(cacheCtx, int(id), phase1Stream, bestCached.URL); err != nil {
-						log.Printf("[CACHE-WRITE] ❌ Failed to cache stream for movie %d: %v", id, err)
-					} else {
-						log.Printf("[CACHE-WRITE] ✅ Cached stream for movie %d (quality: %d, res: %s, hdr: %s)",
-							id, phase1Stream.QualityScore, phase1Stream.Resolution, phase1Stream.HDRType)
+					// Calculate the actual quality score
+					quality := streams.StreamQuality{
+						Resolution:  scoredStream.Resolution,
+						HDRType:     scoredStream.HDRType,
+						AudioFormat: scoredStream.AudioFormat,
+						Source:      scoredStream.Source,
+						Codec:       scoredStream.Codec,
+						SizeGB:      scoredStream.SizeGB,
+						Seeders:     scoredStream.Seeders,
 					}
-				}()
+					scoreBreakdown := streams.CalculateScore(quality)
+					scoredStream.QualityScore = scoreBreakdown.TotalScore
+
+					log.Printf("[CACHE-PHASE1] Scoring result: quality=%d, res=%s, hdr=%s, audio=%s, source=%s, codec=%s",
+						scoredStream.QualityScore, scoredStream.Resolution, scoredStream.HDRType,
+						scoredStream.AudioFormat, scoredStream.Source, scoredStream.Codec)
+					phase1Stream.QualityScore = scoredStream.QualityScore
+					phase1Stream.Resolution = scoredStream.Resolution
+					phase1Stream.HDRType = scoredStream.HDRType
+					phase1Stream.AudioFormat = scoredStream.AudioFormat
+					phase1Stream.Source = scoredStream.Source
+					phase1Stream.Codec = scoredStream.Codec
+
+					// Cache it with the stream URL (async to not block response)
+					go func() {
+						cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						if err := h.streamCacheStore.CacheStream(cacheCtx, int(id), phase1Stream, bestCached.URL); err != nil {
+							log.Printf("[CACHE-WRITE] ❌ Failed to cache stream for movie %d: %v", id, err)
+						} else {
+							log.Printf("[CACHE-WRITE] ✅ Cached stream for movie %d (quality: %d, res: %s, hdr: %s)",
+								id, phase1Stream.QualityScore, phase1Stream.Resolution, phase1Stream.HDRType)
+						}
+					}()
+				}
 			}
 		}
 	}
