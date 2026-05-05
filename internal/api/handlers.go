@@ -145,6 +145,65 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 	}
 }
 
+func (h *Handler) activeContentFilterSettings() (*settings.Settings, services.ContentFilterOptions, bool) {
+	if h == nil || h.settingsManager == nil {
+		return nil, services.ContentFilterOptions{}, false
+	}
+	st := h.settingsManager.Get()
+	if st == nil {
+		return nil, services.ContentFilterOptions{}, false
+	}
+	return st, cleanupFilterOptions(st), true
+}
+
+func contentBlockedPayload(reason string) map[string]interface{} {
+	return map[string]interface{}{
+		"success": false,
+		"error":   fmt.Sprintf("content blocked by settings (%s)", reason),
+		"reason":  reason,
+	}
+}
+
+func (h *Handler) filterMoviesForLibrary(ctx context.Context, movies []*models.Movie) []*models.Movie {
+	st, opts, ok := h.activeContentFilterSettings()
+	if !ok {
+		return movies
+	}
+
+	filtered := make([]*models.Movie, 0, len(movies))
+	for _, movie := range movies {
+		allowed, _ := services.MovieAllowedByContentFilters(movie, opts)
+		if !allowed {
+			continue
+		}
+		if st.HideUnavailableContent && !h.movieHasPlayableSource(ctx, movie) {
+			continue
+		}
+		filtered = append(filtered, movie)
+	}
+	return filtered
+}
+
+func (h *Handler) filterSeriesForLibrary(ctx context.Context, series []*models.Series) []*models.Series {
+	st, opts, ok := h.activeContentFilterSettings()
+	if !ok {
+		return series
+	}
+
+	filtered := make([]*models.Series, 0, len(series))
+	for _, item := range series {
+		allowed, _ := services.SeriesAllowedByContentFilters(item, opts)
+		if !allowed {
+			continue
+		}
+		if st.HideUnavailableContent && !h.seriesHasPlayableSource(ctx, item) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
 func (h *Handler) refreshRuntimeConfig(cfg *settings.Settings) {
 	if h.runtimeConfig == nil || cfg == nil {
 		return
@@ -298,19 +357,7 @@ func (h *Handler) ListMovies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply Bollywood filter for library listing
-	if h.settingsManager != nil {
-		st := h.settingsManager.Get()
-		if st.BlockBollywood {
-			filtered := make([]*models.Movie, 0, len(movies))
-			for _, m := range movies {
-				if !services.IsIndianMovie(m) {
-					filtered = append(filtered, m)
-				}
-			}
-			movies = filtered
-		}
-	}
+	movies = h.filterMoviesForLibrary(ctx, movies)
 
 	// Apply sorting
 	if sortBy != "" {
@@ -370,14 +417,9 @@ func (h *Handler) AddMovie(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bollywood blocking (Indian-origin content)
-	if h.settingsManager != nil {
-		st := h.settingsManager.Get()
-		if st.BlockBollywood && services.IsIndianMovie(movie) {
-			respondJSON(w, http.StatusOK, map[string]interface{}{
-				"success": false,
-				"error":   "content blocked by settings (bollywood)",
-			})
+	if _, opts, ok := h.activeContentFilterSettings(); ok {
+		if allowed, reason := services.MovieAllowedByContentFilters(movie, opts); !allowed {
+			respondJSON(w, http.StatusOK, contentBlockedPayload(reason))
 			return
 		}
 	}
@@ -461,6 +503,13 @@ func (h *Handler) addCollectionMovies(ctx context.Context, collectionTMDBID int,
 		movie, coll, err := h.tmdbClient.GetMovieWithCollection(ctx, tmdbID)
 		if err != nil {
 			continue
+		}
+
+		if _, opts, ok := h.activeContentFilterSettings(); ok {
+			if allowed, reason := services.MovieAllowedByContentFilters(movie, opts); !allowed {
+				fmt.Printf("[Collection Sync] Skipping '%s' from '%s': %s\n", movie.Title, collection.Name, reason)
+				continue
+			}
 		}
 
 		movie.Monitored = monitored
@@ -1510,19 +1559,7 @@ func (h *Handler) ListSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply Bollywood filter for library listing
-	if h.settingsManager != nil {
-		st := h.settingsManager.Get()
-		if st.BlockBollywood {
-			filtered := make([]*models.Series, 0, len(series))
-			for _, s := range series {
-				if !services.IsIndianSeries(s) {
-					filtered = append(filtered, s)
-				}
-			}
-			series = filtered
-		}
-	}
+	series = h.filterSeriesForLibrary(ctx, series)
 
 	// Apply sorting
 	if sortBy != "" {
@@ -1584,14 +1621,9 @@ func (h *Handler) AddSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bollywood blocking (Indian-origin content)
-	if h.settingsManager != nil {
-		st := h.settingsManager.Get()
-		if st.BlockBollywood && services.IsIndianSeries(tmdbSeries) {
-			respondJSON(w, http.StatusOK, map[string]interface{}{
-				"success": false,
-				"error":   "content blocked by settings (bollywood)",
-			})
+	if _, opts, ok := h.activeContentFilterSettings(); ok {
+		if allowed, reason := services.SeriesAllowedByContentFilters(tmdbSeries, opts); !allowed {
+			respondJSON(w, http.StatusOK, contentBlockedPayload(reason))
 			return
 		}
 	}

@@ -213,6 +213,15 @@ interface VersionInfo {
   update_message?: string;
 }
 
+interface CleanupPlan {
+  movies_matched: number;
+  series_matched: number;
+  movies_deleted: number;
+  series_deleted: number;
+  movie_reasons: Record<string, number>;
+  series_reasons: Record<string, number>;
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -280,6 +289,10 @@ export default function Settings() {
   const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState<TabType>("account");
   const [profileMessage, setProfileMessage] = useState("");
+  const [cleanupPreview, setCleanupPreview] = useState<CleanupPlan | null>(
+    null,
+  );
+  const [cleaningFilters, setCleaningFilters] = useState(false);
 
   // State - MDBList
   const [newListUrl, setNewListUrl] = useState("");
@@ -559,6 +572,47 @@ export default function Settings() {
         `❌ Error saving: ${error.response?.data?.error || error.message}`,
       );
       setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
+  const cleanupFilteredLibrary = async (deleteMatches: boolean) => {
+    if (
+      deleteMatches &&
+      !confirm(
+        "Delete all library items that do not match the current content filters?",
+      )
+    ) {
+      return;
+    }
+
+    setCleaningFilters(true);
+    try {
+      const response = await api.post("/maintenance/cleanup-filters", null, {
+        params: {
+          delete: deleteMatches,
+          include_unavailable: settings?.hide_unavailable_content || false,
+        },
+      });
+      const plan = response.data as CleanupPlan;
+      setCleanupPreview(plan);
+      if (deleteMatches) {
+        setMessage(
+          `✅ Removed ${plan.movies_deleted} movies and ${plan.series_deleted} series`,
+        );
+        fetchDbStats();
+      } else {
+        setMessage(
+          `Found ${plan.movies_matched} movies and ${plan.series_matched} series that match cleanup`,
+        );
+      }
+      setTimeout(() => setMessage(""), 5000);
+    } catch (error: any) {
+      setMessage(
+        `❌ Cleanup failed: ${error.response?.data?.error || error.message}`,
+      );
+      setTimeout(() => setMessage(""), 5000);
+    } finally {
+      setCleaningFilters(false);
     }
   };
 
@@ -3211,6 +3265,77 @@ export default function Settings() {
                         • Streams are checked during library updates and imports
                       </li>
                     </ul>
+                  </div>
+
+                  <div className="p-3 bg-[#242424] border border-white/10 rounded-lg">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-white">
+                          Existing Library Cleanup
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Preview or remove saved library items that fail the
+                          current filters.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => cleanupFilteredLibrary(false)}
+                          disabled={cleaningFilters}
+                          className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg flex items-center gap-2 text-sm"
+                        >
+                          <Search size={16} />
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cleanupFilteredLibrary(true)}
+                          disabled={cleaningFilters}
+                          className="px-3 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg flex items-center gap-2 text-sm"
+                        >
+                          <Trash2 size={16} />
+                          Delete Matches
+                        </button>
+                      </div>
+                    </div>
+
+                    {cleanupPreview && (
+                      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <div className="p-3 bg-black/20 rounded-lg">
+                          <p className="text-slate-300 font-medium">
+                            Movies: {cleanupPreview.movies_matched} matched
+                            {cleanupPreview.movies_deleted > 0 &&
+                              `, ${cleanupPreview.movies_deleted} deleted`}
+                          </p>
+                          <div className="mt-2 space-y-1 text-slate-500">
+                            {Object.entries(
+                              cleanupPreview.movie_reasons || {},
+                            ).map(([reason, count]) => (
+                              <p key={reason}>
+                                {reason}: {count}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="p-3 bg-black/20 rounded-lg">
+                          <p className="text-slate-300 font-medium">
+                            Series: {cleanupPreview.series_matched} matched
+                            {cleanupPreview.series_deleted > 0 &&
+                              `, ${cleanupPreview.series_deleted} deleted`}
+                          </p>
+                          <div className="mt-2 space-y-1 text-slate-500">
+                            {Object.entries(
+                              cleanupPreview.series_reasons || {},
+                            ).map(([reason, count]) => (
+                              <p key={reason}>
+                                {reason}: {count}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
