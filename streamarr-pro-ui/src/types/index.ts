@@ -195,6 +195,8 @@ export interface DashboardStats {
   monitored_movies: number;
   monitored_series: number;
   available_movies: number;
+  rd_backed_movies: number;
+  rd_backed_series: number;
   available_episodes: number;
   disk_space: {
     total: string;

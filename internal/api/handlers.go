@@ -1784,10 +1784,13 @@ type cleanupCandidate struct {
 }
 
 type cleanupPlan struct {
-	Movies        []cleanupCandidate `json:"movies"`
-	Series        []cleanupCandidate `json:"series"`
-	MovieReasons  map[string]int     `json:"movie_reasons"`
-	SeriesReasons map[string]int     `json:"series_reasons"`
+	Movies           []cleanupCandidate `json:"movies"`
+	Series           []cleanupCandidate `json:"series"`
+	MovieReasons     map[string]int     `json:"movie_reasons"`
+	SeriesReasons    map[string]int     `json:"series_reasons"`
+	RDMissingChecked bool               `json:"rd_missing_checked,omitempty"`
+	RDTorrentsSeen   int                `json:"rd_torrents_seen,omitempty"`
+	RDStateReset     int64              `json:"rd_state_reset,omitempty"`
 }
 
 func cleanupFilterOptions(st *settings.Settings) services.ContentFilterOptions {
@@ -1862,6 +1865,71 @@ func (h *Handler) seriesHasPlayableSource(ctx context.Context, series *models.Se
 	return err == nil && exists
 }
 
+func (h *Handler) movieHasRealDebridSource(ctx context.Context, movie *models.Movie) bool {
+	if movie == nil || h.movieStore == nil {
+		return false
+	}
+
+	var exists bool
+	err := h.movieStore.GetDB().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM media_streams
+			WHERE movie_id = $1
+			  AND COALESCE(is_available, true) = true
+			  AND rd_library_added = true
+			  AND COALESCE(rd_torrent_id, '') <> ''
+		)
+	`, movie.ID).Scan(&exists)
+	return err == nil && exists
+}
+
+func (h *Handler) seriesHasRealDebridSource(ctx context.Context, series *models.Series) bool {
+	if series == nil || h.seriesStore == nil {
+		return false
+	}
+
+	var exists bool
+	err := h.seriesStore.GetDB().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM media_streams
+			WHERE series_id = $1
+			  AND COALESCE(is_available, true) = true
+			  AND rd_library_added = true
+			  AND COALESCE(rd_torrent_id, '') <> ''
+		)
+	`, series.ID).Scan(&exists)
+	return err == nil && exists
+}
+
+func (h *Handler) refreshRealDebridLibraryState(ctx context.Context) (map[string]struct{}, int64, error) {
+	if h.settingsManager == nil || h.streamCacheStore == nil {
+		return nil, 0, fmt.Errorf("Real-Debrid cleanup dependencies not initialized")
+	}
+	st := h.settingsManager.Get()
+	if st == nil || strings.TrimSpace(st.RealDebridAPIKey) == "" {
+		return nil, 0, fmt.Errorf("Real-Debrid API key is required to match the current RD library")
+	}
+
+	client := h.rdClient
+	if client == nil {
+		client = services.NewRealDebridClient(st.RealDebridAPIKey)
+	}
+	ids, err := client.ListAllTorrentIDs(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	message := "reset RD state during cleanup because torrent is missing from current Real-Debrid library"
+	reset, err := h.streamCacheStore.ResetRDLibraryMissingFrom(ctx, ids, message)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return ids, reset, nil
+}
+
 func addCleanupSample(samples []cleanupCandidate, candidate cleanupCandidate) []cleanupCandidate {
 	if len(samples) >= 25 {
 		return samples
@@ -1869,7 +1937,7 @@ func addCleanupSample(samples []cleanupCandidate, candidate cleanupCandidate) []
 	return append(samples, candidate)
 }
 
-func cleanupPlanResponse(plan cleanupPlan, dryRun bool, includeUnavailable bool, moviesDeleted int, seriesDeleted int) map[string]interface{} {
+func cleanupPlanResponse(plan cleanupPlan, dryRun bool, includeUnavailable bool, includeRDMissing bool, moviesDeleted int, seriesDeleted int) map[string]interface{} {
 	movieSamples := make([]cleanupCandidate, 0, 25)
 	for _, candidate := range plan.Movies {
 		movieSamples = addCleanupSample(movieSamples, candidate)
@@ -1884,6 +1952,10 @@ func cleanupPlanResponse(plan cleanupPlan, dryRun bool, includeUnavailable bool,
 		"success":             true,
 		"dry_run":             dryRun,
 		"include_unavailable": includeUnavailable,
+		"include_rd_missing":  includeRDMissing,
+		"rd_missing_checked":  plan.RDMissingChecked,
+		"rd_torrents_seen":    plan.RDTorrentsSeen,
+		"rd_state_reset":      plan.RDStateReset,
 		"movies_matched":      len(plan.Movies),
 		"series_matched":      len(plan.Series),
 		"movies_deleted":      moviesDeleted,
@@ -1910,11 +1982,22 @@ func (h *Handler) CleanupFilteredLibrary(w http.ResponseWriter, r *http.Request)
 	st := h.settingsManager.Get()
 	opts := cleanupFilterOptions(st)
 	includeUnavailable := queryBool(r, "include_unavailable")
+	includeRDMissing := queryBool(r, "include_rd_missing")
 	dryRun := !queryBool(r, "delete")
 
 	plan := cleanupPlan{
 		MovieReasons:  make(map[string]int),
 		SeriesReasons: make(map[string]int),
+	}
+	if includeRDMissing {
+		ids, reset, err := h.refreshRealDebridLibraryState(ctx)
+		if err != nil {
+			respondError(w, http.StatusBadGateway, fmt.Sprintf("failed to refresh Real-Debrid library state: %v", err))
+			return
+		}
+		plan.RDMissingChecked = true
+		plan.RDTorrentsSeen = len(ids)
+		plan.RDStateReset = reset
 	}
 
 	limit := 500
@@ -1933,6 +2016,10 @@ func (h *Handler) CleanupFilteredLibrary(w http.ResponseWriter, r *http.Request)
 			if allowed && includeUnavailable && !h.movieHasPlayableSource(ctx, movie) {
 				allowed = false
 				reason = "no streams"
+			}
+			if allowed && includeRDMissing && !h.movieHasRealDebridSource(ctx, movie) {
+				allowed = false
+				reason = "not in Real-Debrid"
 			}
 			if allowed {
 				continue
@@ -1964,6 +2051,10 @@ func (h *Handler) CleanupFilteredLibrary(w http.ResponseWriter, r *http.Request)
 			if allowed && includeUnavailable && !h.seriesHasPlayableSource(ctx, series) {
 				allowed = false
 				reason = "no streams"
+			}
+			if allowed && includeRDMissing && !h.seriesHasRealDebridSource(ctx, series) {
+				allowed = false
+				reason = "not in Real-Debrid"
 			}
 			if allowed {
 				continue
@@ -1999,7 +2090,7 @@ func (h *Handler) CleanupFilteredLibrary(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	respondJSON(w, http.StatusOK, cleanupPlanResponse(plan, dryRun, includeUnavailable, moviesDeleted, seriesDeleted))
+	respondJSON(w, http.StatusOK, cleanupPlanResponse(plan, dryRun, includeUnavailable, includeRDMissing, moviesDeleted, seriesDeleted))
 }
 
 // GetSeriesEpisodes handles GET /api/series/{id}/episodes
@@ -4051,6 +4142,7 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 
 	var totalMovies, monitoredMovies, availableMovies int64
 	var totalSeries, monitoredSeries int64
+	var rdBackedMovies, rdBackedSeries int64
 	var totalEpisodes int
 	var totalChannels, activeChannels int
 	var totalCollections int
@@ -4099,13 +4191,38 @@ func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
 			totalCollections = count
 		}
 	}
+	if h.streamCacheStore != nil {
+		db := h.streamCacheStore.GetDB()
+		if err := db.QueryRowContext(ctx, `
+			SELECT COUNT(DISTINCT movie_id)
+			FROM media_streams
+			WHERE movie_id IS NOT NULL
+			  AND COALESCE(is_available, true) = true
+			  AND rd_library_added = true
+			  AND COALESCE(rd_torrent_id, '') <> ''
+		`).Scan(&rdBackedMovies); err != nil {
+			log.Printf("Failed to count RD-backed movies: %v", err)
+		}
+		if err := db.QueryRowContext(ctx, `
+			SELECT COUNT(DISTINCT series_id)
+			FROM media_streams
+			WHERE series_id IS NOT NULL
+			  AND COALESCE(is_available, true) = true
+			  AND rd_library_added = true
+			  AND COALESCE(rd_torrent_id, '') <> ''
+		`).Scan(&rdBackedSeries); err != nil {
+			log.Printf("Failed to count RD-backed series: %v", err)
+		}
+	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"total_movies":      totalMovies,
 		"monitored_movies":  monitoredMovies,
 		"available_movies":  availableMovies,
+		"rd_backed_movies":  rdBackedMovies,
 		"total_series":      totalSeries,
 		"monitored_series":  monitoredSeries,
+		"rd_backed_series":  rdBackedSeries,
 		"total_episodes":    totalEpisodes,
 		"total_channels":    totalChannels,
 		"active_channels":   activeChannels,

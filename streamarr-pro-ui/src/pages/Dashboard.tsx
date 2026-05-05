@@ -9,8 +9,10 @@ interface DashboardStats {
   total_movies: number;
   monitored_movies: number;
   available_movies: number;
+  rd_backed_movies: number;
   total_series: number;
   monitored_series: number;
+  rd_backed_series: number;
   total_episodes: number;
   total_channels: number;
   active_channels: number;
@@ -53,8 +55,10 @@ export default function Dashboard() {
   const dashboardStats = {
     totalMovies: stats?.total_movies || 0,
     monitoredMovies: stats?.monitored_movies || 0,
+    rdBackedMovies: stats?.rd_backed_movies || 0,
     totalSeries: stats?.total_series || 0,
     monitoredSeries: stats?.monitored_series || 0,
+    rdBackedSeries: stats?.rd_backed_series || 0,
     totalChannels: stats?.total_channels || 0,
     activeChannels: stats?.active_channels || 0,
     totalCollections: stats?.total_collections || 0,
@@ -74,7 +78,7 @@ export default function Dashboard() {
           icon={Film}
           label="Movies"
           value={dashboardStats.totalMovies}
-          subtitle={`${dashboardStats.monitoredMovies} monitored`}
+          subtitle={`${dashboardStats.monitoredMovies} monitored | ${dashboardStats.rdBackedMovies} RD`}
           color="purple"
           link="/library"
         />
@@ -82,7 +86,7 @@ export default function Dashboard() {
           icon={Tv}
           label="TV Shows"
           value={dashboardStats.totalSeries}
-          subtitle={`${dashboardStats.monitoredSeries} monitored`}
+          subtitle={`${dashboardStats.monitoredSeries} monitored | ${dashboardStats.rdBackedSeries} RD`}
           color="green"
           link="/library"
         />

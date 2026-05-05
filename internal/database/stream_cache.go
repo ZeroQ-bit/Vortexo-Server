@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/Zerr0-C00L/StreamArr/internal/models"
+	"github.com/lib/pq"
 )
 
 // StreamCacheStore manages media_streams table operations
@@ -696,6 +697,59 @@ func (s *StreamCacheStore) ResetRDLibraryByCacheID(ctx context.Context, cacheID 
 	}
 
 	return nil
+}
+
+// ResetRDLibraryMissingFrom clears local Real-Debrid library state for cached
+// streams whose tracked RD torrent ID is no longer present in the account.
+func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validTorrentIDs map[string]struct{}, exportErr string) (int64, error) {
+	baseSet := `
+		UPDATE media_streams
+		SET rd_library_added = false,
+		    rd_torrent_id = NULL,
+		    rd_library_added_at = NULL,
+		    plex_exported = false,
+		    plex_export_path = '',
+		    plex_exported_at = NULL,
+		    plex_export_error = $1,
+		    updated_at = NOW()
+		WHERE rd_library_added = true
+	`
+
+	var (
+		result sql.Result
+		err    error
+	)
+
+	if len(validTorrentIDs) == 0 {
+		result, err = s.db.ExecContext(ctx, baseSet, exportErr)
+	} else {
+		ids := make([]string, 0, len(validTorrentIDs))
+		for id := range validTorrentIDs {
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			result, err = s.db.ExecContext(ctx, baseSet, exportErr)
+		} else {
+			result, err = s.db.ExecContext(ctx, baseSet+`
+		  AND (
+		    COALESCE(rd_torrent_id, '') = ''
+		    OR NOT (rd_torrent_id = ANY($2))
+		  )
+		`, exportErr, pq.Array(ids))
+		}
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to reset missing RD library state: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count missing RD library resets: %w", err)
+	}
+	return rows, nil
 }
 
 func (s *StreamCacheStore) MarkUnavailableByCacheID(ctx context.Context, cacheID int, exportErr string) error {

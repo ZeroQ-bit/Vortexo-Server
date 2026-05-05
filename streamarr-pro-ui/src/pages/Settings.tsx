@@ -220,6 +220,9 @@ interface CleanupPlan {
   series_deleted: number;
   movie_reasons: Record<string, number>;
   series_reasons: Record<string, number>;
+  rd_missing_checked?: boolean;
+  rd_torrents_seen?: number;
+  rd_state_reset?: number;
 }
 
 export default function Settings() {
@@ -293,6 +296,8 @@ export default function Settings() {
     null,
   );
   const [cleaningFilters, setCleaningFilters] = useState(false);
+  const [cleanupRequireRealDebrid, setCleanupRequireRealDebrid] =
+    useState(false);
 
   // State - MDBList
   const [newListUrl, setNewListUrl] = useState("");
@@ -579,7 +584,9 @@ export default function Settings() {
     if (
       deleteMatches &&
       !confirm(
-        "Delete all library items that do not match the current content filters?",
+        cleanupRequireRealDebrid
+          ? "Delete all library items that do not match the current filters or are not present in your current Real-Debrid library?"
+          : "Delete all library items that do not match the current content filters?",
       )
     ) {
       return;
@@ -591,6 +598,7 @@ export default function Settings() {
         params: {
           delete: deleteMatches,
           include_unavailable: settings?.hide_unavailable_content || false,
+          include_rd_missing: cleanupRequireRealDebrid,
         },
       });
       const plan = response.data as CleanupPlan;
@@ -3299,6 +3307,20 @@ export default function Settings() {
                         </button>
                       </div>
                     </div>
+                    <label className="mt-3 flex items-start gap-2 text-xs text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={cleanupRequireRealDebrid}
+                        onChange={(e) =>
+                          setCleanupRequireRealDebrid(e.target.checked)
+                        }
+                        className="mt-0.5 w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
+                      />
+                      <span>
+                        Match current Real-Debrid library and include items
+                        whose tracked RD torrent is missing.
+                      </span>
+                    </label>
 
                     {cleanupPreview && (
                       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
@@ -3335,6 +3357,14 @@ export default function Settings() {
                           </div>
                         </div>
                       </div>
+                    )}
+                    {cleanupPreview?.rd_missing_checked && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        Real-Debrid check saw{" "}
+                        {cleanupPreview.rd_torrents_seen || 0} torrents and
+                        reset {cleanupPreview.rd_state_reset || 0} stale local
+                        RD links.
+                      </p>
                     )}
                   </div>
                 </div>

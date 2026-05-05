@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,13 @@ type rdTorrentInfo struct {
 	Status   string   `json:"status"`
 	Added    string   `json:"added"`
 	Links    []string `json:"links"`
+}
+
+type rdTorrentListItem struct {
+	ID       string `json:"id"`
+	Filename string `json:"filename"`
+	Hash     string `json:"hash"`
+	Status   string `json:"status"`
 }
 
 type rdInstantAvailability struct {
@@ -165,6 +173,59 @@ func (c *RealDebridClient) GetTorrentInfo(ctx context.Context, torrentID string)
 	}
 
 	return &info, nil
+}
+
+// ListTorrents retrieves a page of torrents currently present in the user's Real-Debrid account.
+func (c *RealDebridClient) ListTorrents(ctx context.Context, page, limit int) ([]rdTorrentListItem, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+
+	endpoint := fmt.Sprintf("%s/torrents", rdBaseURL)
+	params := url.Values{}
+	params.Set("page", strconv.Itoa(page))
+	params.Set("limit", strconv.Itoa(limit))
+
+	data, err := c.makeRequest(ctx, "GET", endpoint, params, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list torrents: %w", err)
+	}
+
+	var torrents []rdTorrentListItem
+	if err := json.Unmarshal(data, &torrents); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal torrents list: %w", err)
+	}
+
+	return torrents, nil
+}
+
+func (c *RealDebridClient) ListAllTorrentIDs(ctx context.Context) (map[string]struct{}, error) {
+	const pageSize = 100
+
+	ids := make(map[string]struct{})
+	for page := 1; ; page++ {
+		torrents, err := c.ListTorrents(ctx, page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, torrent := range torrents {
+			id := strings.TrimSpace(torrent.ID)
+			if id != "" {
+				ids[id] = struct{}{}
+			}
+		}
+		if len(torrents) < pageSize {
+			break
+		}
+	}
+
+	return ids, nil
 }
 
 // UnrestrictLink converts a Real-Debrid link to a direct download link
