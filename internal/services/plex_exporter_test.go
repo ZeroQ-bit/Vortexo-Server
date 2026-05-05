@@ -218,6 +218,66 @@ func TestFindBestMountedMatchSeriesDirectoryRejectsWrongEpisode(t *testing.T) {
 	}
 }
 
+func TestSeriesExportSymlinkNeedsRefreshAcceptsExpectedTarget(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "rd", "Dandelion.S01E01.1080p.mkv")
+	exportPath := filepath.Join(base, "shows", "Dandelion - s01e01.mkv")
+	writeTestVideo(t, source, 32)
+	writeTestSymlink(t, source, exportPath)
+
+	needsRefresh, err := seriesExportSymlinkNeedsRefresh(&models.CachedStream{
+		MediaType: "series",
+		Season:    1,
+		Episode:   1,
+	}, exportPath, "Dandelion.S01.1080p.WEB-DL", "Dandelion")
+	if err != nil {
+		t.Fatalf("verify symlink target: %v", err)
+	}
+	if needsRefresh {
+		t.Fatal("expected matching series symlink target to remain valid")
+	}
+}
+
+func TestSeriesExportSymlinkNeedsRefreshRejectsWrongEpisodeTarget(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "rd", "Dandelion.S01E07.1080p.mkv")
+	exportPath := filepath.Join(base, "shows", "Dandelion - s01e01.mkv")
+	writeTestVideo(t, source, 32)
+	writeTestSymlink(t, source, exportPath)
+
+	needsRefresh, err := seriesExportSymlinkNeedsRefresh(&models.CachedStream{
+		MediaType: "series",
+		Season:    1,
+		Episode:   1,
+	}, exportPath, "Dandelion.S01.1080p.WEB-DL", "Dandelion")
+	if err != nil {
+		t.Fatalf("verify symlink target: %v", err)
+	}
+	if !needsRefresh {
+		t.Fatal("expected wrong episode symlink target to need refresh")
+	}
+}
+
+func TestSeriesExportSymlinkNeedsRefreshRejectsUnrelatedSameEpisodeTarget(t *testing.T) {
+	base := t.TempDir()
+	source := filepath.Join(base, "rd", "We Are All Trying Here S01E01 1080p.mkv")
+	exportPath := filepath.Join(base, "shows", "Absolute Value of Romance - s01e01.mkv")
+	writeTestVideo(t, source, 32)
+	writeTestSymlink(t, source, exportPath)
+
+	needsRefresh, err := seriesExportSymlinkNeedsRefresh(&models.CachedStream{
+		MediaType: "series",
+		Season:    1,
+		Episode:   1,
+	}, exportPath, "Absolute Value of Romance S01E01 MULTI 1080p WEB H264-HiggsBoson.mkv", "Absolute Value of Romance")
+	if err != nil {
+		t.Fatalf("verify symlink target: %v", err)
+	}
+	if !needsRefresh {
+		t.Fatal("expected unrelated same-episode symlink target to need refresh")
+	}
+}
+
 func writeTestVideo(t *testing.T, path string, size int) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -229,5 +289,15 @@ func writeTestVideo(t *testing.T, path string, size int) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("create test video: %v", err)
+	}
+}
+
+func writeTestSymlink(t *testing.T, target, linkPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("create symlink directory: %v", err)
+	}
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
 	}
 }

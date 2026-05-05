@@ -278,7 +278,7 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 		stats.checkedCount++
 		GlobalScheduler.UpdateProgress(ServicePlexExport, i, len(exported), fmt.Sprintf("Reconciling %s", label))
 
-		_, infoErr := p.rdClient.GetTorrentInfo(ctx, cached.RDTorrentID)
+		info, infoErr := p.rdClient.GetTorrentInfo(ctx, cached.RDTorrentID)
 		if infoErr != nil {
 			if isRealDebridMissingTorrentError(infoErr) {
 				stats.staleRDCount++
@@ -334,6 +334,42 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 				continue
 			}
 			log.Printf("[PLEX-EXPORT] Reset stale Plex export for %s so it can be re-materialized", label)
+			continue
+		}
+
+		hintTitle, _ := p.buildMediaSearchHints(ctx, cached)
+		targetMismatch, mismatchErr := seriesExportSymlinkNeedsRefresh(cached, cached.PlexExportPath, info.Filename, hintTitle)
+		if mismatchErr != nil {
+			stats.failedCount++
+			if serviceErr == nil {
+				serviceErr = fmt.Errorf("verify plex export target %q: %w", cached.PlexExportPath, mismatchErr)
+			}
+			log.Printf("[PLEX-EXPORT] Could not verify Plex export target for %s: %v", label, mismatchErr)
+			continue
+		}
+		if targetMismatch {
+			stats.staleLinkCount++
+			if removed, removeErr := p.removeManagedExportSymlink(cfg, cached.PlexExportPath); removeErr != nil {
+				stats.failedCount++
+				if serviceErr == nil {
+					serviceErr = removeErr
+				}
+				log.Printf("[PLEX-EXPORT] Failed to remove mismatched Plex symlink for %s: %v", label, removeErr)
+				continue
+			} else if removed {
+				stats.removedLinkCount++
+			}
+
+			message := truncateString(fmt.Sprintf("reset plex export after symlink target no longer matched requested episode: %s", cached.PlexExportPath), 500)
+			if resetErr := p.streamCache.ResetPlexExportByCacheID(ctx, cached.ID, message); resetErr != nil {
+				stats.failedCount++
+				if serviceErr == nil {
+					serviceErr = resetErr
+				}
+				log.Printf("[PLEX-EXPORT] Failed to reset mismatched Plex export for %s: %v", label, resetErr)
+				continue
+			}
+			log.Printf("[PLEX-EXPORT] Reset mismatched Plex export for %s so it can be re-materialized", label)
 			continue
 		}
 
@@ -1075,6 +1111,63 @@ func plexExportPathNeedsRefresh(path string) (bool, error) {
 		return false, err
 	}
 	return false, nil
+}
+
+func seriesExportSymlinkNeedsRefresh(cached *models.CachedStream, exportPath, torrentName, mediaTitle string) (bool, error) {
+	if cached == nil || cached.MediaType != "series" {
+		return false, nil
+	}
+
+	info, err := os.Lstat(exportPath)
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+
+	target, err := os.Readlink(exportPath)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(target) == "" {
+		return true, nil
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(exportPath), target)
+	}
+
+	episodeTokens := cachedEpisodeTokens(cached)
+	if len(episodeTokens) == 0 {
+		return false, nil
+	}
+
+	episodeSignal := matchesEpisodeToken(target, episodeTokens)
+	identitySignal := mountedSeriesIdentitySignal(target, torrentName, cached.StreamHash, mediaTitle)
+	return !episodeSignal || !identitySignal, nil
+}
+
+func mountedSeriesIdentitySignal(path, torrentName, streamHash, mediaTitle string) bool {
+	lowerPath := strings.ToLower(path)
+	normalizedPath := normalizeMatchString(path)
+
+	if normalizedTitle := normalizeMatchString(mediaTitle); normalizedTitle != "" && strings.Contains(normalizedPath, normalizedTitle) {
+		return true
+	}
+
+	torrentBase := strings.ToLower(filepath.Base(strings.TrimSpace(torrentName)))
+	if torrentBase != "" && strings.Contains(lowerPath, torrentBase) {
+		return true
+	}
+	if normalizedTorrentBase := normalizeMatchString(torrentBase); normalizedTorrentBase != "" && strings.Contains(normalizedPath, normalizedTorrentBase) {
+		return true
+	}
+
+	if hash := strings.ToLower(strings.TrimSpace(streamHash)); hash != "" && strings.Contains(lowerPath, hash) {
+		return true
+	}
+
+	return false
 }
 
 func (p *PlexExporter) removeManagedExportSymlink(cfg *settings.Settings, exportPath string) (bool, error) {
