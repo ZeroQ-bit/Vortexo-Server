@@ -30,6 +30,7 @@ import axios from "axios";
 
 // v1.2.1 - Added manual IP configuration
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1";
+const CLEANUP_MATCH_REALDEBRID_KEY = "streamarr_cleanup_match_realdebrid";
 
 // Create axios instance with auth token
 const api = axios.create({
@@ -296,8 +297,9 @@ export default function Settings() {
     null,
   );
   const [cleaningFilters, setCleaningFilters] = useState(false);
-  const [cleanupRequireRealDebrid, setCleanupRequireRealDebrid] =
-    useState(false);
+  const [cleanupRequireRealDebrid, setCleanupRequireRealDebrid] = useState(
+    () => localStorage.getItem(CLEANUP_MATCH_REALDEBRID_KEY) === "true",
+  );
 
   // State - MDBList
   const [newListUrl, setNewListUrl] = useState("");
@@ -622,6 +624,11 @@ export default function Settings() {
     } finally {
       setCleaningFilters(false);
     }
+  };
+
+  const updateCleanupRequireRealDebrid = (checked: boolean) => {
+    setCleanupRequireRealDebrid(checked);
+    localStorage.setItem(CLEANUP_MATCH_REALDEBRID_KEY, String(checked));
   };
 
   const fetchServices = async () => {
@@ -3312,7 +3319,7 @@ export default function Settings() {
                         type="checkbox"
                         checked={cleanupRequireRealDebrid}
                         onChange={(e) =>
-                          setCleanupRequireRealDebrid(e.target.checked)
+                          updateCleanupRequireRealDebrid(e.target.checked)
                         }
                         className="mt-0.5 w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
                       />
