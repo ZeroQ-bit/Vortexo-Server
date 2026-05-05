@@ -38,6 +38,20 @@ type plexExportStats struct {
 	missingFileCount int
 	resetRDCount     int
 	retiredCount     int
+	reconciledCount  int
+	staleRDCount     int
+	removedLinkCount int
+	staleLinkCount   int
+	verifiedCount    int
+}
+
+type plexReconcileStats struct {
+	checkedCount     int
+	verifiedCount    int
+	staleRDCount     int
+	staleLinkCount   int
+	removedLinkCount int
+	failedCount      int
 }
 
 type sourceResolutionError struct {
@@ -134,20 +148,38 @@ func (p *PlexExporter) ExportPending(ctx context.Context) error {
 	}
 	p.rdClient = NewRealDebridClient(apiKey)
 
+	reconcileStats, reconcileErr := p.reconcileExistingExports(ctx, cfg, 25)
+	if reconcileErr != nil {
+		log.Printf("[PLEX-EXPORT] Reconciliation warning: %v", reconcileErr)
+	}
+
 	pending, err := p.streamCache.GetPendingPlexExports(ctx, 100)
 	if err != nil {
 		return err
 	}
 	log.Printf("[PLEX-EXPORT] Pending export candidates: %d", len(pending))
 	if len(pending) == 0 {
+		if reconcileErr != nil {
+			return reconcileErr
+		}
 		GlobalScheduler.UpdateProgress(ServicePlexExport, 0, 0, "No pending Plex exports")
 		return nil
 	}
 
 	GlobalScheduler.UpdateProgress(ServicePlexExport, 0, len(pending), "Exporting cached items to Plex")
 
-	stats := plexExportStats{pendingCount: len(pending)}
+	stats := plexExportStats{
+		pendingCount:     len(pending),
+		reconciledCount:  reconcileStats.checkedCount,
+		staleRDCount:     reconcileStats.staleRDCount,
+		removedLinkCount: reconcileStats.removedLinkCount,
+		staleLinkCount:   reconcileStats.staleLinkCount,
+		verifiedCount:    reconcileStats.verifiedCount,
+	}
 	var serviceErr error
+	if reconcileErr != nil {
+		serviceErr = reconcileErr
+	}
 	for i, cached := range pending {
 		label := fmt.Sprintf("%s #%d", cached.MediaType, cached.MediaID)
 		if cached.MediaType == "movie" {
@@ -206,8 +238,8 @@ func (p *PlexExporter) ExportPending(ctx context.Context) error {
 		GlobalScheduler.UpdateProgress(ServicePlexExport, i+1, len(pending), fmt.Sprintf("Exported %s", label))
 	}
 
-	log.Printf("[PLEX-EXPORT] Run summary: pending=%d exported=%d failed=%d missing_rd_torrent_id=%d missing_source=%d reset_rd=%d retired=%d",
-		stats.pendingCount, stats.exportedCount, stats.failedCount, stats.missingRDCount, stats.missingFileCount, stats.resetRDCount, stats.retiredCount)
+	log.Printf("[PLEX-EXPORT] Run summary: reconciled=%d verified=%d stale_rd=%d stale_links=%d removed_links=%d pending=%d exported=%d failed=%d missing_rd_torrent_id=%d missing_source=%d reset_rd=%d retired=%d",
+		stats.reconciledCount, stats.verifiedCount, stats.staleRDCount, stats.staleLinkCount, stats.removedLinkCount, stats.pendingCount, stats.exportedCount, stats.failedCount, stats.missingRDCount, stats.missingFileCount, stats.resetRDCount, stats.retiredCount)
 
 	if serviceErr != nil {
 		return serviceErr
@@ -219,6 +251,106 @@ func (p *PlexExporter) ExportPending(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settings.Settings, limit int) (plexReconcileStats, error) {
+	stats := plexReconcileStats{}
+	if limit <= 0 {
+		return stats, nil
+	}
+
+	exported, err := p.streamCache.GetPlexExportsForReconciliation(ctx, limit)
+	if err != nil {
+		return stats, err
+	}
+	if len(exported) == 0 {
+		return stats, nil
+	}
+
+	log.Printf("[PLEX-EXPORT] Reconciling %d existing Plex exports", len(exported))
+	var serviceErr error
+	for i, cached := range exported {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+
+		label := fmt.Sprintf("%s #%d", cached.MediaType, cached.MediaID)
+		stats.checkedCount++
+		GlobalScheduler.UpdateProgress(ServicePlexExport, i, len(exported), fmt.Sprintf("Reconciling %s", label))
+
+		_, infoErr := p.rdClient.GetTorrentInfo(ctx, cached.RDTorrentID)
+		if infoErr != nil {
+			if isRealDebridMissingTorrentError(infoErr) {
+				stats.staleRDCount++
+				if removed, removeErr := p.removeManagedExportSymlink(cfg, cached.PlexExportPath); removeErr != nil {
+					stats.failedCount++
+					if serviceErr == nil {
+						serviceErr = removeErr
+					}
+					log.Printf("[PLEX-EXPORT] Failed to remove stale Plex symlink for %s: %v", label, removeErr)
+				} else if removed {
+					stats.removedLinkCount++
+				}
+
+				message := truncateString(fmt.Sprintf("reset rd state after reconciliation: %v", infoErr), 500)
+				if resetErr := p.streamCache.ResetRDLibraryByCacheID(ctx, cached.ID, message); resetErr != nil {
+					stats.failedCount++
+					if serviceErr == nil {
+						serviceErr = resetErr
+					}
+					log.Printf("[PLEX-EXPORT] Failed to reset stale RD export for %s: %v", label, resetErr)
+					continue
+				}
+				log.Printf("[PLEX-EXPORT] Reset stale RD export for %s after Real-Debrid no longer had torrent %q", label, cached.RDTorrentID)
+				continue
+			}
+
+			stats.failedCount++
+			if serviceErr == nil {
+				serviceErr = fmt.Errorf("verify rd torrent %q: %w", cached.RDTorrentID, infoErr)
+			}
+			log.Printf("[PLEX-EXPORT] Could not verify RD torrent for %s: %v", label, infoErr)
+			continue
+		}
+
+		needsRefresh, pathErr := plexExportPathNeedsRefresh(cached.PlexExportPath)
+		if pathErr != nil {
+			stats.failedCount++
+			if serviceErr == nil {
+				serviceErr = fmt.Errorf("verify plex export path %q: %w", cached.PlexExportPath, pathErr)
+			}
+			log.Printf("[PLEX-EXPORT] Could not verify Plex export path for %s: %v", label, pathErr)
+			continue
+		}
+		if needsRefresh {
+			stats.staleLinkCount++
+			message := truncateString(fmt.Sprintf("reset plex export after exported path went stale: %s", cached.PlexExportPath), 500)
+			if resetErr := p.streamCache.ResetPlexExportByCacheID(ctx, cached.ID, message); resetErr != nil {
+				stats.failedCount++
+				if serviceErr == nil {
+					serviceErr = resetErr
+				}
+				log.Printf("[PLEX-EXPORT] Failed to reset stale Plex export for %s: %v", label, resetErr)
+				continue
+			}
+			log.Printf("[PLEX-EXPORT] Reset stale Plex export for %s so it can be re-materialized", label)
+			continue
+		}
+
+		if err := p.streamCache.MarkPlexExportVerifiedByID(ctx, cached.ID); err != nil {
+			stats.failedCount++
+			if serviceErr == nil {
+				serviceErr = err
+			}
+			log.Printf("[PLEX-EXPORT] Failed to mark Plex export verified for %s: %v", label, err)
+			continue
+		}
+		stats.verifiedCount++
+	}
+
+	log.Printf("[PLEX-EXPORT] Reconciliation summary: checked=%d verified=%d stale_rd=%d stale_links=%d removed_links=%d failed=%d",
+		stats.checkedCount, stats.verifiedCount, stats.staleRDCount, stats.staleLinkCount, stats.removedLinkCount, stats.failedCount)
+	return stats, serviceErr
 }
 
 func (p *PlexExporter) exportSingle(ctx context.Context, cfg *settings.Settings, cached *models.CachedStream) (string, error) {
@@ -787,6 +919,92 @@ func shouldResetRDLibraryState(err *sourceResolutionError) bool {
 		return true
 	}
 	return false
+}
+
+func isRealDebridMissingTorrentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "status 404") ||
+		strings.Contains(msg, "unknown_ressource") ||
+		strings.Contains(msg, "unknown_resource")
+}
+
+func plexExportPathNeedsRefresh(path string) (bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return true, nil
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+func (p *PlexExporter) removeManagedExportSymlink(cfg *settings.Settings, exportPath string) (bool, error) {
+	exportPath = strings.TrimSpace(exportPath)
+	if exportPath == "" || cfg == nil {
+		return false, nil
+	}
+	if !pathWithinRoot(exportPath, cfg.PlexExportMoviesPath) && !pathWithinRoot(exportPath, cfg.PlexExportShowsPath) {
+		log.Printf("[PLEX-EXPORT] Leaving stale export path outside managed Plex roots untouched: %s", exportPath)
+		return false, nil
+	}
+
+	info, err := os.Lstat(exportPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		log.Printf("[PLEX-EXPORT] Leaving stale export path because it is not a symlink: %s", exportPath)
+		return false, nil
+	}
+
+	if err := os.Remove(exportPath); err != nil {
+		return false, err
+	}
+	log.Printf("[PLEX-EXPORT] Removed stale Plex symlink: %s", exportPath)
+	return true, nil
+}
+
+func pathWithinRoot(path, root string) bool {
+	path = strings.TrimSpace(path)
+	root = strings.TrimSpace(root)
+	if path == "" || root == "" {
+		return false
+	}
+
+	absPath, pathErr := filepath.Abs(filepath.Clean(path))
+	absRoot, rootErr := filepath.Abs(filepath.Clean(root))
+	if pathErr != nil || rootErr != nil {
+		return false
+	}
+
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func ensureDir(path string) error {

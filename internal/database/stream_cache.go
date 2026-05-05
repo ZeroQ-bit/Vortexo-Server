@@ -543,6 +543,88 @@ func (s *StreamCacheStore) GetPendingPlexExports(ctx context.Context, limit int)
 	return streams, nil
 }
 
+// GetPlexExportsForReconciliation retrieves exported Plex entries that still
+// point at a Real-Debrid torrent. The caller can verify whether the remote
+// torrent and local symlink are still valid.
+func (s *StreamCacheStore) GetPlexExportsForReconciliation(ctx context.Context, limit int) ([]*models.CachedStream, error) {
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_streams
+		WHERE is_available = true
+		  AND rd_library_added = true
+		  AND COALESCE(rd_torrent_id, '') <> ''
+		  AND plex_exported = true
+		ORDER BY updated_at ASC
+		LIMIT $1
+	`, cachedStreamSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Plex exports for reconciliation: %w", err)
+	}
+	defer rows.Close()
+
+	var streams []*models.CachedStream
+	for rows.Next() {
+		cached := &models.CachedStream{}
+		if err := scanCachedStream(rows, cached); err != nil {
+			return nil, fmt.Errorf("failed to scan Plex export for reconciliation: %w", err)
+		}
+		streams = append(streams, cached)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating Plex exports for reconciliation: %w", err)
+	}
+
+	return streams, nil
+}
+
+func (s *StreamCacheStore) MarkPlexExportVerifiedByID(ctx context.Context, cacheID int) error {
+	query := `
+		UPDATE media_streams
+		SET plex_export_error = '',
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, cacheID)
+	if err != nil {
+		return fmt.Errorf("failed to mark Plex export verified: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream found for cache id %d", cacheID)
+	}
+
+	return nil
+}
+
+func (s *StreamCacheStore) ResetPlexExportByCacheID(ctx context.Context, cacheID int, exportErr string) error {
+	query := `
+		UPDATE media_streams
+		SET plex_exported = false,
+		    plex_export_path = '',
+		    plex_exported_at = NULL,
+		    plex_export_error = $2,
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, cacheID, exportErr)
+	if err != nil {
+		return fmt.Errorf("failed to reset Plex export state: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream found for cache id %d", cacheID)
+	}
+
+	return nil
+}
+
 func (s *StreamCacheStore) MarkPlexExportedByID(ctx context.Context, cacheID int, exportPath string) error {
 	query := `
 		UPDATE media_streams
