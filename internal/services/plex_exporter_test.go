@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Zerr0-C00L/StreamArr/internal/models"
 	"github.com/Zerr0-C00L/StreamArr/internal/settings"
 )
 
@@ -107,5 +108,126 @@ func TestRemoveManagedExportSymlinkOnlyRemovesSymlinksUnderRoots(t *testing.T) {
 	}
 	if _, err := os.Lstat(outsideLink); err != nil {
 		t.Fatalf("expected outside symlink to remain: %v", err)
+	}
+}
+
+func TestResolveCandidatePathSeriesDirectoryUsesRequestedEpisode(t *testing.T) {
+	base := t.TempDir()
+	seasonPack := filepath.Join(base, "Dandelion.S01.1080p.WEB-DL")
+	wrongEpisode := filepath.Join(seasonPack, "Dandelion.S01E07.1080p.mkv")
+	rightEpisode := filepath.Join(seasonPack, "Dandelion.S01E01.1080p.mkv")
+	writeTestVideo(t, wrongEpisode, 32)
+	writeTestVideo(t, rightEpisode, 8)
+
+	resolved, ok := resolveCandidatePath(seasonPack, &models.CachedStream{
+		MediaType: "series",
+		Season:    1,
+		Episode:   1,
+	})
+	if !ok {
+		t.Fatal("expected series directory to resolve the requested episode")
+	}
+	if resolved != rightEpisode {
+		t.Fatalf("expected %s, got %s", rightEpisode, resolved)
+	}
+}
+
+func TestResolveCandidatePathSeriesDirectoryRejectsWrongEpisode(t *testing.T) {
+	base := t.TempDir()
+	seasonPack := filepath.Join(base, "Dandelion.S01.1080p.WEB-DL")
+	writeTestVideo(t, filepath.Join(seasonPack, "Dandelion.S01E07.1080p.mkv"), 32)
+
+	resolved, ok := resolveCandidatePath(seasonPack, &models.CachedStream{
+		MediaType: "series",
+		Season:    1,
+		Episode:   1,
+	})
+	if ok || resolved != "" {
+		t.Fatalf("expected no match for missing requested episode, got ok=%v path=%s", ok, resolved)
+	}
+}
+
+func TestFindBestMountedMatchSeriesRejectsEpisodeOnlyUnrelatedTitle(t *testing.T) {
+	root := t.TempDir()
+	writeTestVideo(t, filepath.Join(root, "__all__", "We Are All Trying Here S01E01 1080p.mkv"), 32)
+
+	match, err := findBestMountedMatch(root,
+		"Absolute Value of Romance S01E01 MULTI 1080p WEB H264-HiggsBoson.mkv",
+		&models.CachedStream{
+			MediaType: "series",
+			Season:    1,
+			Episode:   1,
+		},
+		"Absolute Value of Romance",
+		2026,
+	)
+	if err != nil {
+		t.Fatalf("find mounted match: %v", err)
+	}
+	if match != "" {
+		t.Fatalf("expected unrelated S01E01 file to be ignored, got %s", match)
+	}
+}
+
+func TestFindBestMountedMatchSeriesDirectoryUsesRequestedEpisode(t *testing.T) {
+	root := t.TempDir()
+	seasonPack := filepath.Join(root, "Dandelion.S01.1080p.WEB-DL")
+	wrongEpisode := filepath.Join(seasonPack, "Dandelion.S01E07.1080p.mkv")
+	rightEpisode := filepath.Join(seasonPack, "Dandelion.S01E01.1080p.mkv")
+	writeTestVideo(t, wrongEpisode, 32)
+	writeTestVideo(t, rightEpisode, 8)
+
+	match, err := findBestMountedMatch(root,
+		"Dandelion.S01.1080p.WEB-DL",
+		&models.CachedStream{
+			MediaType: "series",
+			Season:    1,
+			Episode:   1,
+		},
+		"Dandelion",
+		2025,
+	)
+	if err != nil {
+		t.Fatalf("find mounted match: %v", err)
+	}
+	if match != rightEpisode {
+		t.Fatalf("expected %s, got %s", rightEpisode, match)
+	}
+}
+
+func TestFindBestMountedMatchSeriesDirectoryRejectsWrongEpisode(t *testing.T) {
+	root := t.TempDir()
+	seasonPack := filepath.Join(root, "Dandelion.S01.1080p.WEB-DL")
+	writeTestVideo(t, filepath.Join(seasonPack, "Dandelion.S01E07.1080p.mkv"), 32)
+
+	match, err := findBestMountedMatch(root,
+		"Dandelion.S01.1080p.WEB-DL",
+		&models.CachedStream{
+			MediaType: "series",
+			Season:    1,
+			Episode:   1,
+		},
+		"Dandelion",
+		2025,
+	)
+	if err != nil {
+		t.Fatalf("find mounted match: %v", err)
+	}
+	if match != "" {
+		t.Fatalf("expected missing requested episode to be ignored, got %s", match)
+	}
+}
+
+func writeTestVideo(t *testing.T, path string, size int) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create test media directory: %v", err)
+	}
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte('a' + i%26)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("create test video: %v", err)
 	}
 }

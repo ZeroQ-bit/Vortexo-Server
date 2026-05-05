@@ -467,7 +467,7 @@ func (p *PlexExporter) resolveSourcePath(ctx context.Context, cfg *settings.Sett
 		}
 
 		for _, candidate := range candidates {
-			resolved, ok := resolveCandidatePath(candidate)
+			resolved, ok := resolveCandidatePath(candidate, cached)
 			if ok {
 				log.Printf("[PLEX-EXPORT] Matched direct candidate for cache_id=%d under %s: %s", cached.ID, root, resolved)
 				return resolved, nil
@@ -672,13 +672,19 @@ func (p *PlexExporter) refreshPlexPath(ctx context.Context, cfg *settings.Settin
 	return nil
 }
 
-func resolveCandidatePath(path string) (string, bool) {
+func resolveCandidatePath(path string, cached *models.CachedStream) (string, bool) {
 	stat, err := os.Stat(path)
 	if err != nil {
 		return "", false
 	}
 	if stat.IsDir() {
-		file, err := findLargestVideoFile(path)
+		var file string
+		var err error
+		if cached != nil && cached.MediaType == "series" {
+			file, err = findVideoFileByEpisodeToken(path, cachedEpisodeTokens(cached))
+		} else {
+			file, err = findLargestVideoFile(path)
+		}
 		if err != nil || file == "" {
 			return "", false
 		}
@@ -695,10 +701,8 @@ func findBestMountedMatch(root, torrentName string, cached *models.CachedStream,
 	if mediaYear > 0 {
 		yearToken = strconv.Itoa(mediaYear)
 	}
-	episodeToken := ""
-	if cached.MediaType == "series" {
-		episodeToken = fmt.Sprintf("s%02de%02d", cached.Season, cached.Episode)
-	}
+	episodeTokens := cachedEpisodeTokens(cached)
+	isSeries := cached != nil && cached.MediaType == "series"
 
 	type candidate struct {
 		path  string
@@ -748,18 +752,35 @@ func findBestMountedMatch(root, torrentName string, cached *models.CachedStream,
 			score += 25
 			hashSignal = true
 		}
-		if episodeToken != "" && strings.Contains(name, episodeToken) {
+		if len(episodeTokens) > 0 && matchesEpisodeToken(name, episodeTokens) {
 			score += 20
 			episodeSignal = true
 		}
 
-		strongSignal := torrentSignal || hashSignal || episodeSignal || (titleSignal && (yearToken == "" || yearSignal))
-		if score == 0 || !strongSignal {
+		identitySignal := torrentSignal || hashSignal || titleSignal
+		if isSeries {
+			if score == 0 || !identitySignal {
+				return nil
+			}
+		} else {
+			strongSignal := torrentSignal || hashSignal || (titleSignal && (yearToken == "" || yearSignal))
+			if score == 0 || !strongSignal {
+				return nil
+			}
+		}
+
+		if isSeries && !d.IsDir() && !episodeSignal {
 			return nil
 		}
 
 		if d.IsDir() {
-			videoPath, fileErr := findLargestVideoFile(path)
+			var videoPath string
+			var fileErr error
+			if isSeries {
+				videoPath, fileErr = findVideoFileByEpisodeToken(path, episodeTokens)
+			} else {
+				videoPath, fileErr = findLargestVideoFile(path)
+			}
 			if fileErr == nil && videoPath != "" {
 				if info, statErr := os.Stat(videoPath); statErr == nil {
 					matches = append(matches, candidate{path: videoPath, score: score, size: info.Size()})
@@ -794,6 +815,104 @@ func findBestMountedMatch(root, torrentName string, cached *models.CachedStream,
 		return matches[i].score > matches[j].score
 	})
 
+	return matches[0].path, nil
+}
+
+func cachedEpisodeTokens(cached *models.CachedStream) []string {
+	if cached == nil || cached.MediaType != "series" || cached.Season <= 0 || cached.Episode <= 0 {
+		return nil
+	}
+
+	raw := []string{
+		fmt.Sprintf("s%02de%02d", cached.Season, cached.Episode),
+		fmt.Sprintf("s%02de%d", cached.Season, cached.Episode),
+		fmt.Sprintf("s%de%02d", cached.Season, cached.Episode),
+		fmt.Sprintf("s%de%d", cached.Season, cached.Episode),
+		fmt.Sprintf("%02dx%02d", cached.Season, cached.Episode),
+		fmt.Sprintf("%dx%02d", cached.Season, cached.Episode),
+		fmt.Sprintf("%dx%d", cached.Season, cached.Episode),
+	}
+
+	seen := map[string]struct{}{}
+	tokens := make([]string, 0, len(raw))
+	for _, token := range raw {
+		token = strings.ToLower(strings.TrimSpace(token))
+		if token == "" {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		tokens = append(tokens, token)
+	}
+	return tokens
+}
+
+func matchesEpisodeToken(value string, episodeTokens []string) bool {
+	if strings.TrimSpace(value) == "" || len(episodeTokens) == 0 {
+		return false
+	}
+	lower := strings.ToLower(value)
+	compact := strings.ReplaceAll(normalizeMatchString(value), " ", "")
+	for _, token := range episodeTokens {
+		if strings.Contains(lower, token) || strings.Contains(compact, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func findVideoFileByEpisodeToken(root string, episodeTokens []string) (string, error) {
+	if len(episodeTokens) == 0 {
+		return "", nil
+	}
+
+	type candidate struct {
+		path  string
+		score int
+		size  int64
+	}
+
+	var matches []candidate
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !isVideoFile(path) {
+			return nil
+		}
+
+		score := 0
+		if matchesEpisodeToken(d.Name(), episodeTokens) {
+			score += 20
+		}
+		if matchesEpisodeToken(path, episodeTokens) {
+			score += 10
+		}
+		if score == 0 {
+			return nil
+		}
+
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			return nil
+		}
+		matches = append(matches, candidate{path: path, score: score, size: info.Size()})
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(matches) == 0 {
+		return "", nil
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score == matches[j].score {
+			return matches[i].size > matches[j].size
+		}
+		return matches[i].score > matches[j].score
+	})
 	return matches[0].path, nil
 }
 
