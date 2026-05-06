@@ -325,27 +325,23 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 		}
 		if needsRefresh {
 			stats.staleLinkCount++
-			if removed, removeErr := p.removeManagedExportSymlink(cfg, cached.PlexExportPath); removeErr != nil {
+			refreshed, removed, refreshErr := p.refreshExistingExport(ctx, cfg, cached, cached.PlexExportPath, label, "stale path")
+			if refreshErr != nil {
 				stats.failedCount++
 				if serviceErr == nil {
-					serviceErr = removeErr
+					serviceErr = refreshErr
 				}
-				log.Printf("[PLEX-EXPORT] Failed to remove stale Plex symlink for %s: %v", label, removeErr)
-				continue
-			} else if removed {
-				stats.removedLinkCount++
-			}
-
-			message := truncateString(fmt.Sprintf("reset plex export after exported path went stale: %s", cached.PlexExportPath), 500)
-			if resetErr := p.streamCache.ResetPlexExportByCacheID(ctx, cached.ID, message); resetErr != nil {
-				stats.failedCount++
-				if serviceErr == nil {
-					serviceErr = resetErr
-				}
-				log.Printf("[PLEX-EXPORT] Failed to reset stale Plex export for %s: %v", label, resetErr)
 				continue
 			}
-			log.Printf("[PLEX-EXPORT] Reset stale Plex export for %s so it can be re-materialized", label)
+			if refreshed {
+				stats.verifiedCount++
+				if removed {
+					stats.removedLinkCount++
+				}
+				continue
+			}
+			stats.failedCount++
+			log.Printf("[PLEX-EXPORT] Left stale Plex export for %s in place because it could not be refreshed yet", label)
 			continue
 		}
 
@@ -361,27 +357,23 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 		}
 		if targetMismatch {
 			stats.staleLinkCount++
-			if removed, removeErr := p.removeManagedExportSymlink(cfg, cached.PlexExportPath); removeErr != nil {
+			refreshed, removed, refreshErr := p.refreshExistingExport(ctx, cfg, cached, cached.PlexExportPath, label, "mismatched target")
+			if refreshErr != nil {
 				stats.failedCount++
 				if serviceErr == nil {
-					serviceErr = removeErr
+					serviceErr = refreshErr
 				}
-				log.Printf("[PLEX-EXPORT] Failed to remove mismatched Plex symlink for %s: %v", label, removeErr)
-				continue
-			} else if removed {
-				stats.removedLinkCount++
-			}
-
-			message := truncateString(fmt.Sprintf("reset plex export after symlink target no longer matched requested episode: %s", cached.PlexExportPath), 500)
-			if resetErr := p.streamCache.ResetPlexExportByCacheID(ctx, cached.ID, message); resetErr != nil {
-				stats.failedCount++
-				if serviceErr == nil {
-					serviceErr = resetErr
-				}
-				log.Printf("[PLEX-EXPORT] Failed to reset mismatched Plex export for %s: %v", label, resetErr)
 				continue
 			}
-			log.Printf("[PLEX-EXPORT] Reset mismatched Plex export for %s so it can be re-materialized", label)
+			if refreshed {
+				stats.verifiedCount++
+				if removed {
+					stats.removedLinkCount++
+				}
+				continue
+			}
+			stats.failedCount++
+			log.Printf("[PLEX-EXPORT] Left mismatched Plex export for %s in place because it could not be refreshed yet", label)
 			continue
 		}
 
@@ -399,6 +391,36 @@ func (p *PlexExporter) reconcileExistingExports(ctx context.Context, cfg *settin
 	log.Printf("[PLEX-EXPORT] Reconciliation summary: checked=%d verified=%d stale_rd=%d stale_links=%d removed_links=%d failed=%d",
 		stats.checkedCount, stats.verifiedCount, stats.staleRDCount, stats.staleLinkCount, stats.removedLinkCount, stats.failedCount)
 	return stats, serviceErr
+}
+
+func (p *PlexExporter) refreshExistingExport(ctx context.Context, cfg *settings.Settings, cached *models.CachedStream, oldPath, label, reason string) (bool, bool, error) {
+	exportPath, exportErr := p.exportSingle(ctx, cfg, cached)
+	if exportErr != nil {
+		log.Printf("[PLEX-EXPORT] Could not refresh %s Plex export for %s: %v", reason, label, exportErr)
+		if _, handleErr := p.handleExportFailure(ctx, cached, label, exportErr); handleErr != nil {
+			return false, false, handleErr
+		}
+		if isServiceLevelPlexExportError(exportErr) {
+			return false, false, exportErr
+		}
+		return false, false, nil
+	}
+
+	removedOld := false
+	if oldPath != "" && !sameCleanPath(oldPath, exportPath) {
+		removed, removeErr := p.removeManagedExportSymlink(cfg, oldPath)
+		if removeErr != nil {
+			return false, false, removeErr
+		}
+		removedOld = removed
+	}
+
+	if err := p.streamCache.MarkPlexExportedByID(ctx, cached.ID, exportPath); err != nil {
+		return false, removedOld, err
+	}
+
+	log.Printf("[PLEX-EXPORT] Refreshed %s Plex export for %s -> %s", reason, label, exportPath)
+	return true, removedOld, nil
 }
 
 func (p *PlexExporter) exportSingle(ctx context.Context, cfg *settings.Settings, cached *models.CachedStream) (string, error) {
@@ -1251,6 +1273,24 @@ func pathWithinRoot(path, root string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func sameCleanPath(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return left == right
+	}
+
+	cleanLeft := filepath.Clean(left)
+	cleanRight := filepath.Clean(right)
+	if cleanLeft == cleanRight {
+		return true
+	}
+
+	absLeft, leftErr := filepath.Abs(cleanLeft)
+	absRight, rightErr := filepath.Abs(cleanRight)
+	return leftErr == nil && rightErr == nil && absLeft == absRight
 }
 
 func pathAtOrWithinRoot(path, root string) bool {
