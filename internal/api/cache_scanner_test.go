@@ -1,6 +1,11 @@
 package api
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/Zerr0-C00L/StreamArr/internal/models"
+)
 
 func TestExtractHashFromURLResolveSkipsDebridToken(t *testing.T) {
 	token := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -49,5 +54,32 @@ func TestExtractHashFromURLAcceptsFileIndexContext(t *testing.T) {
 	got := extractHashFromURL(raw)
 	if got != hash {
 		t.Fatalf("expected hash before file index, got %q", got)
+	}
+}
+
+func TestFilterSeriesEpisodesForCacheScan(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	past := now.AddDate(0, 0, -1)
+	future := now.AddDate(0, 0, 1)
+
+	episodes := []*models.Episode{
+		nil,
+		{SeasonNumber: 1, EpisodeNumber: 1, AirDate: &past, Monitored: true},
+		{SeasonNumber: 1, EpisodeNumber: 2, Monitored: true},
+		{SeasonNumber: 1, EpisodeNumber: 3, AirDate: &future, Monitored: true},
+		{SeasonNumber: 1, EpisodeNumber: 4, AirDate: &past, Monitored: false},
+		{SeasonNumber: 0, EpisodeNumber: 1, AirDate: &past, Monitored: true},
+		{SeasonNumber: 1, EpisodeNumber: 0, AirDate: &past, Monitored: true},
+	}
+
+	got := filterSeriesEpisodesForCacheScan(episodes, now)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 scan candidates, got %d", len(got))
+	}
+	if got[0].SeasonNumber != 1 || got[0].EpisodeNumber != 1 {
+		t.Fatalf("expected first scan candidate to be S01E01, got S%02dE%02d", got[0].SeasonNumber, got[0].EpisodeNumber)
+	}
+	if got[1].SeasonNumber != 1 || got[1].EpisodeNumber != 2 {
+		t.Fatalf("expected second scan candidate to be S01E02, got S%02dE%02d", got[1].SeasonNumber, got[1].EpisodeNumber)
 	}
 }

@@ -23,6 +23,7 @@ import (
 type CacheScanner struct {
 	movieStore      *database.MovieStore
 	seriesStore     *database.SeriesStore
+	episodeStore    *database.EpisodeStore
 	cacheStore      *database.StreamCacheStore
 	streamService   *streams.StreamService
 	provider        *providers.MultiProvider
@@ -51,6 +52,7 @@ func (cs *CacheScanner) getProvider() *providers.MultiProvider {
 func NewCacheScanner(
 	movieStore *database.MovieStore,
 	seriesStore *database.SeriesStore,
+	episodeStore *database.EpisodeStore,
 	cacheStore *database.StreamCacheStore,
 	streamService *streams.StreamService,
 	provider *providers.MultiProvider,
@@ -60,6 +62,7 @@ func NewCacheScanner(
 	return &CacheScanner{
 		movieStore:      movieStore,
 		seriesStore:     seriesStore,
+		episodeStore:    episodeStore,
 		cacheStore:      cacheStore,
 		streamService:   streamService,
 		provider:        provider,
@@ -330,21 +333,20 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 	log.Printf("[CACHE-SCANNER] Movies scan complete: %d total movies processed, %d newly cached, %d skipped, %d errors",
 		totalProcessed, cached, skipped, errors)
 
-	// Now scan series (scan first episode of first season for each series as a sample)
-	log.Println("[CACHE-SCANNER] Starting series scan...")
-	seriesScanned, seriesCached, seriesErrors := cs.scanSeries(ctx)
-	log.Printf("[CACHE-SCANNER] Series scan complete: %d series scanned, %d cached, %d errors",
-		seriesScanned, seriesCached, seriesErrors)
+	log.Println("[CACHE-SCANNER] Starting series episode scan...")
+	seriesScanned, episodesCached, seriesErrors := cs.scanSeries(ctx)
+	log.Printf("[CACHE-SCANNER] Series episode scan complete: %d series scanned, %d episodes cached, %d errors",
+		seriesScanned, episodesCached, seriesErrors)
 
 	log.Printf("[CACHE-SCANNER] === FULL SCAN COMPLETE ===")
 	log.Printf("[CACHE-SCANNER] Movies: %d processed, %d newly cached, %d skipped", totalProcessed, cached, skipped)
-	log.Printf("[CACHE-SCANNER] Series: %d scanned, %d cached", seriesScanned, seriesCached)
+	log.Printf("[CACHE-SCANNER] Series: %d scanned, %d episodes cached", seriesScanned, episodesCached)
 	log.Printf("[CACHE-SCANNER] Total errors: %d", errors+seriesErrors)
 
 	return nil
 }
 
-// scanSeries scans all series and caches first episode of first season
+// scanSeries scans monitored series and caches streams for monitored aired episodes.
 func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 	scanned := 0
 	cached := 0
@@ -352,9 +354,10 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 
 	batchSize := 5000
 	offset := 0
+	monitored := true
 
 	for {
-		series, err := cs.seriesStore.List(ctx, offset, batchSize, nil)
+		series, err := cs.seriesStore.List(ctx, offset, batchSize, &monitored)
 		if err != nil {
 			log.Printf("[CACHE-SCANNER] Error getting series at offset %d: %v", offset, err)
 			return scanned, cached, errors + 1
@@ -373,204 +376,37 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 				log.Printf("[CACHE-SCANNER] Series progress: %d scanned, %d cached", scanned, cached)
 			}
 
-			// Get IMDB ID
 			imdbID, ok := s.Metadata["imdb_id"].(string)
 			if !ok || imdbID == "" {
 				continue
 			}
 
-			// For now, cache S01E01 as a sample (in future: scan all episodes)
-			season, episode := 1, 1
-
-			// Check if already cached
-			existsQuery := `SELECT COUNT(*) FROM media_streams WHERE series_id = $1 AND season = $2 AND episode = $3`
-			var count int
-			if err := cs.cacheStore.GetDB().QueryRowContext(ctx, existsQuery, s.ID, season, episode).Scan(&count); err == nil && count > 0 {
-				continue // Already cached
-			}
-
-			// Fetch streams for this episode
-			provider := cs.getProvider()
-			if provider == nil {
-				continue
-			}
-
-			providerStreams, err := provider.GetSeriesStreams(imdbID, season, episode)
-			if err != nil || len(providerStreams) == 0 {
-				continue
-			}
-
-			// Apply local quality exclusion filters from settings
-			excludedQualities := cs.settingsManager.Get().ExcludedQualities
-			if excludedQualities != "" {
-				var filteredStreams []providers.TorrentioStream
-				for _, stream := range providerStreams {
-					parsed := cs.streamService.ParseStreamFromTorrentName(stream.Title, stream.InfoHash, stream.Source, 0)
-					if !cs.streamService.ShouldExcludeByQualityType(stream.Title, parsed.Resolution, parsed.HDRType, excludedQualities) {
-						filteredStreams = append(filteredStreams, stream)
-					}
-				}
-				providerStreams = filteredStreams
-			}
-
-			if len(providerStreams) == 0 {
-				continue
-			}
-
-			// Extract hashes from URL if InfoHash is empty or malformed (happens with Torrentio+RD)
-			hashes := make([]string, 0)
-			for i := range providerStreams {
-				hash := providerStreams[i].InfoHash
-				if !isValidHash(hash) && providerStreams[i].URL != "" {
-					hash = extractHashFromURL(providerStreams[i].URL)
-					if isValidHash(hash) {
-						providerStreams[i].InfoHash = hash
-					}
-				}
-				if isValidHash(hash) {
-					hashes = append(hashes, hash)
-				}
-			}
-
-			if len(hashes) == 0 {
-				continue
-			}
-
-			// Note: Torrentio with RD configured already filters to cached-only streams
-			// All returned streams are pre-filtered as cached
-
-			// Find best cached stream
-			var bestStream *providers.TorrentioStream
-			bestScore := 0
-
-			for i := range providerStreams {
-				// All streams from Torrentio+RD are already cached
-
-				parsed := cs.streamService.ParseStreamFromTorrentName(
-					providerStreams[i].Title,
-					providerStreams[i].InfoHash,
-					providerStreams[i].Source,
-					0,
-				)
-				quality := streams.StreamQuality{
-					Resolution:  parsed.Resolution,
-					HDRType:     parsed.HDRType,
-					AudioFormat: parsed.AudioFormat,
-					Source:      parsed.Source,
-					Codec:       parsed.Codec,
-					SizeGB:      parsed.SizeGB,
-				}
-				score := streams.CalculateScore(quality).TotalScore
-
-				if score > bestScore {
-					bestScore = score
-					bestStream = &providerStreams[i]
-				}
-			}
-
-			if bestStream == nil {
-				continue
-			}
-
-			// Extract hash
-			hash := bestStream.InfoHash
-			if !isValidHash(hash) && bestStream.URL != "" {
-				hash = extractHashFromURL(bestStream.URL)
-			}
-			if !isValidHash(hash) {
-				log.Printf("[CACHE-SCANNER] Skipping cache for %s S%02dE%02d because no valid torrent hash was found in source %q", s.Title, season, episode, bestStream.Source)
-				continue
-			}
-
-			// Parse quality details
-			parsed := cs.streamService.ParseStreamFromTorrentName(bestStream.Title, hash, bestStream.Source, 0)
-			quality := streams.StreamQuality{
-				Resolution:  parsed.Resolution,
-				HDRType:     parsed.HDRType,
-				AudioFormat: parsed.AudioFormat,
-				Source:      parsed.Source,
-				Codec:       parsed.Codec,
-				SizeGB:      parsed.SizeGB,
-			}
-			qualityScore := streams.CalculateScore(quality).TotalScore
-
-			// Insert into media_streams for series
-			insertQuery := `
-				INSERT INTO media_streams (
-					media_type, media_id, series_id, season, episode, stream_url, stream_hash, 
-					quality_score, resolution, hdr_type, audio_format, 
-					source_type, file_size_gb, codec, indexer
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-				ON CONFLICT (series_id, season, episode) WHERE series_id IS NOT NULL
-				DO UPDATE SET 
-					media_type = EXCLUDED.media_type,
-					media_id = EXCLUDED.media_id,
-					stream_url = EXCLUDED.stream_url,
-					stream_hash = EXCLUDED.stream_hash,
-					quality_score = EXCLUDED.quality_score,
-					resolution = EXCLUDED.resolution,
-					hdr_type = EXCLUDED.hdr_type,
-					audio_format = EXCLUDED.audio_format,
-					source_type = EXCLUDED.source_type,
-					file_size_gb = EXCLUDED.file_size_gb,
-					codec = EXCLUDED.codec,
-					indexer = EXCLUDED.indexer,
-					rd_library_added = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
-						ELSE media_streams.rd_library_added
-					END,
-					rd_torrent_id = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-						ELSE media_streams.rd_torrent_id
-					END,
-					rd_library_added_at = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-						ELSE media_streams.rd_library_added_at
-					END,
-					plex_exported = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
-						ELSE media_streams.plex_exported
-					END,
-					plex_export_path = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-						ELSE media_streams.plex_export_path
-					END,
-					plex_exported_at = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-						ELSE media_streams.plex_exported_at
-					END,
-					plex_export_error = CASE
-						WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-						ELSE media_streams.plex_export_error
-					END,
-					updated_at = NOW()
-			`
-
-			_, err = cs.cacheStore.GetDB().ExecContext(ctx, insertQuery,
-				"series", s.ID, s.ID, season, episode, bestStream.URL, hash,
-				qualityScore, parsed.Resolution, parsed.HDRType, parsed.AudioFormat,
-				parsed.Source, parsed.SizeGB, parsed.Codec, bestStream.Source,
-			)
-
+			episodes, err := cs.seriesEpisodesToScan(ctx, s)
 			if err != nil {
-				log.Printf("[CACHE-SCANNER] ❌ Error caching series %s S%02dE%02d: %v", s.Title, season, episode, err)
+				log.Printf("[CACHE-SCANNER] Error getting episodes for %s: %v", s.Title, err)
 				errors++
-			} else {
-				cached++
-				seriesLabel := s.Title + " S" + twoDigit(season) + "E" + twoDigit(episode)
-				if err := cs.maybeAddCachedStreamToRealDebrid(
-					ctx,
-					seriesLabel,
-					hash,
-					bestStream.FileIdx,
-					func(torrentID string) error {
-						return cs.cacheStore.MarkRealDebridLibraryAddedForSeriesEpisode(ctx, int(s.ID), season, episode, torrentID)
-					},
-				); err != nil {
-					log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", seriesLabel, err)
+				continue
+			}
+			if len(episodes) == 0 {
+				continue
+			}
+
+			log.Printf("[CACHE-SCANNER] Scanning %d episodes for %s", len(episodes), s.Title)
+			for _, ep := range episodes {
+				if err := ctx.Err(); err != nil {
+					log.Printf("[CACHE-SCANNER] Series episode scan cancelled: %v", err)
+					return scanned, cached, errors
 				}
-				log.Printf("[CACHE-SCANNER] ✅ Cached series: %s S%02dE%02d | %s | Score: %d",
-					s.Title, season, episode, parsed.Resolution, qualityScore)
+
+				cachedEpisode, err := cs.scanSeriesEpisode(ctx, s, imdbID, ep.SeasonNumber, ep.EpisodeNumber)
+				if err != nil {
+					log.Printf("[CACHE-SCANNER] Error scanning %s S%02dE%02d: %v", s.Title, ep.SeasonNumber, ep.EpisodeNumber, err)
+					errors++
+					continue
+				}
+				if cachedEpisode {
+					cached++
+				}
 			}
 		}
 
@@ -579,6 +415,248 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 	}
 
 	return scanned, cached, errors
+}
+
+func (cs *CacheScanner) seriesEpisodesToScan(ctx context.Context, s *models.Series) ([]*models.Episode, error) {
+	if cs.episodeStore == nil {
+		return []*models.Episode{{
+			SeriesID:      s.ID,
+			SeasonNumber:  1,
+			EpisodeNumber: 1,
+			Monitored:     true,
+		}}, nil
+	}
+
+	episodes, err := cs.episodeStore.ListBySeries(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(episodes) == 0 {
+		log.Printf("[CACHE-SCANNER] No episode metadata for %s; falling back to S01E01", s.Title)
+		return []*models.Episode{{
+			SeriesID:      s.ID,
+			SeasonNumber:  1,
+			EpisodeNumber: 1,
+			Monitored:     true,
+		}}, nil
+	}
+
+	return filterSeriesEpisodesForCacheScan(episodes, time.Now()), nil
+}
+
+func filterSeriesEpisodesForCacheScan(episodes []*models.Episode, now time.Time) []*models.Episode {
+	filtered := make([]*models.Episode, 0, len(episodes))
+	for _, ep := range episodes {
+		if ep == nil {
+			continue
+		}
+		if !ep.Monitored {
+			continue
+		}
+		if ep.SeasonNumber <= 0 || ep.EpisodeNumber <= 0 {
+			continue
+		}
+		if ep.AirDate != nil && ep.AirDate.After(now) {
+			continue
+		}
+		filtered = append(filtered, ep)
+	}
+	return filtered
+}
+
+func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series, imdbID string, season, episode int) (bool, error) {
+	existsQuery := `SELECT COUNT(*) FROM media_streams WHERE series_id = $1 AND season = $2 AND episode = $3`
+	var count int
+	if err := cs.cacheStore.GetDB().QueryRowContext(ctx, existsQuery, s.ID, season, episode).Scan(&count); err != nil {
+		return false, fmt.Errorf("check existing cache: %w", err)
+	}
+	if count > 0 {
+		return false, nil
+	}
+
+	provider := cs.getProvider()
+	if provider == nil {
+		return false, nil
+	}
+
+	time.Sleep(2 * time.Second)
+	providerStreams, err := provider.GetSeriesStreams(imdbID, season, episode)
+	if err != nil {
+		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "too_many_requests") {
+			log.Printf("[CACHE-SCANNER] Rate limit hit while scanning series episodes, waiting 30 seconds...")
+			time.Sleep(30 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+		return false, fmt.Errorf("fetch streams: %w", err)
+	}
+	if len(providerStreams) == 0 {
+		return false, nil
+	}
+
+	excludedQualities := cs.settingsManager.Get().ExcludedQualities
+	if excludedQualities != "" {
+		var filteredStreams []providers.TorrentioStream
+		for _, stream := range providerStreams {
+			parsed := cs.streamService.ParseStreamFromTorrentName(stream.Title, stream.InfoHash, stream.Source, 0)
+			if !cs.streamService.ShouldExcludeByQualityType(stream.Title, parsed.Resolution, parsed.HDRType, excludedQualities) {
+				filteredStreams = append(filteredStreams, stream)
+			}
+		}
+		providerStreams = filteredStreams
+	}
+
+	if len(providerStreams) == 0 {
+		return false, nil
+	}
+
+	for i := range providerStreams {
+		hash := providerStreams[i].InfoHash
+		if !isValidHash(hash) && providerStreams[i].URL != "" {
+			hash = extractHashFromURL(providerStreams[i].URL)
+			if isValidHash(hash) {
+				providerStreams[i].InfoHash = hash
+			}
+		}
+	}
+
+	bestStream, bestScore := bestTorrentioStream(cs.streamService, providerStreams)
+	if bestStream == nil {
+		return false, nil
+	}
+
+	hash := bestStream.InfoHash
+	if !isValidHash(hash) && bestStream.URL != "" {
+		hash = extractHashFromURL(bestStream.URL)
+	}
+	if !isValidHash(hash) {
+		log.Printf("[CACHE-SCANNER] Skipping cache for %s S%02dE%02d because no valid torrent hash was found in source %q", s.Title, season, episode, bestStream.Source)
+		return false, nil
+	}
+
+	parsed := cs.streamService.ParseStreamFromTorrentName(bestStream.Title, hash, bestStream.Source, 0)
+	quality := streams.StreamQuality{
+		Resolution:  parsed.Resolution,
+		HDRType:     parsed.HDRType,
+		AudioFormat: parsed.AudioFormat,
+		Source:      parsed.Source,
+		Codec:       parsed.Codec,
+		SizeGB:      parsed.SizeGB,
+	}
+	qualityScore := streams.CalculateScore(quality).TotalScore
+	if qualityScore == 0 {
+		qualityScore = bestScore
+	}
+
+	insertQuery := `
+		INSERT INTO media_streams (
+			media_type, media_id, series_id, season, episode, stream_url, stream_hash,
+			quality_score, resolution, hdr_type, audio_format,
+			source_type, file_size_gb, codec, indexer
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (series_id, season, episode) WHERE series_id IS NOT NULL
+		DO UPDATE SET
+			media_type = EXCLUDED.media_type,
+			media_id = EXCLUDED.media_id,
+			stream_url = EXCLUDED.stream_url,
+			stream_hash = EXCLUDED.stream_hash,
+			quality_score = EXCLUDED.quality_score,
+			resolution = EXCLUDED.resolution,
+			hdr_type = EXCLUDED.hdr_type,
+			audio_format = EXCLUDED.audio_format,
+			source_type = EXCLUDED.source_type,
+			file_size_gb = EXCLUDED.file_size_gb,
+			codec = EXCLUDED.codec,
+			indexer = EXCLUDED.indexer,
+			rd_library_added = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+				ELSE media_streams.rd_library_added
+			END,
+			rd_torrent_id = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.rd_torrent_id
+			END,
+			rd_library_added_at = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.rd_library_added_at
+			END,
+			plex_exported = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+				ELSE media_streams.plex_exported
+			END,
+			plex_export_path = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
+				ELSE media_streams.plex_export_path
+			END,
+			plex_exported_at = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.plex_exported_at
+			END,
+			plex_export_error = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
+				ELSE media_streams.plex_export_error
+			END,
+			updated_at = NOW()
+	`
+
+	_, err = cs.cacheStore.GetDB().ExecContext(ctx, insertQuery,
+		"series", s.ID, s.ID, season, episode, bestStream.URL, hash,
+		qualityScore, parsed.Resolution, parsed.HDRType, parsed.AudioFormat,
+		parsed.Source, parsed.SizeGB, parsed.Codec, bestStream.Source,
+	)
+	if err != nil {
+		return false, fmt.Errorf("cache stream: %w", err)
+	}
+
+	seriesLabel := s.Title + " S" + twoDigit(season) + "E" + twoDigit(episode)
+	if err := cs.maybeAddCachedStreamToRealDebrid(
+		ctx,
+		seriesLabel,
+		hash,
+		bestStream.FileIdx,
+		func(torrentID string) error {
+			return cs.cacheStore.MarkRealDebridLibraryAddedForSeriesEpisode(ctx, int(s.ID), season, episode, torrentID)
+		},
+	); err != nil {
+		log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", seriesLabel, err)
+	}
+	log.Printf("[CACHE-SCANNER] Cached series: %s S%02dE%02d | %s | Score: %d",
+		s.Title, season, episode, parsed.Resolution, qualityScore)
+
+	return true, nil
+}
+
+func bestTorrentioStream(streamService *streams.StreamService, providerStreams []providers.TorrentioStream) (*providers.TorrentioStream, int) {
+	var bestStream *providers.TorrentioStream
+	bestScore := 0
+
+	for i := range providerStreams {
+		if !isValidHash(providerStreams[i].InfoHash) {
+			continue
+		}
+		parsed := streamService.ParseStreamFromTorrentName(
+			providerStreams[i].Title,
+			providerStreams[i].InfoHash,
+			providerStreams[i].Source,
+			0,
+		)
+		quality := streams.StreamQuality{
+			Resolution:  parsed.Resolution,
+			HDRType:     parsed.HDRType,
+			AudioFormat: parsed.AudioFormat,
+			Source:      parsed.Source,
+			Codec:       parsed.Codec,
+			SizeGB:      parsed.SizeGB,
+		}
+		score := streams.CalculateScore(quality).TotalScore
+
+		if score > bestScore {
+			bestScore = score
+			bestStream = &providerStreams[i]
+		}
+	}
+
+	return bestStream, bestScore
 }
 
 // isValidHash validates that a string is a 40-character hex v1 torrent hash.

@@ -792,6 +792,7 @@ func main() {
 		cacheScanner = api.NewCacheScanner(
 			movieStore,
 			seriesStore,
+			episodeStore,
 			streamCacheStore,
 			streamService,
 			multiProvider,
