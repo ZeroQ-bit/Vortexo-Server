@@ -368,14 +368,14 @@ func main() {
 	}
 
 	// Initialize EPG manager
-	settings := settingsManager.Get()
+	liveSettings := settingsManager.Get()
 	epgManager := epg.NewEPGManager()
 
 	// Add custom EPG URLs from M3U sources
-	log.Printf("Live TV: Checking %d M3U sources for EPG URLs", len(settings.M3USources))
-	if len(settings.M3USources) > 0 {
+	log.Printf("Live TV: Checking %d M3U sources for EPG URLs", len(liveSettings.M3USources))
+	if len(liveSettings.M3USources) > 0 {
 		var customEPGURLs []string
-		for _, s := range settings.M3USources {
+		for _, s := range liveSettings.M3USources {
 			log.Printf("Live TV: M3U source '%s' - enabled=%v, epg_url='%s'", s.Name, s.Enabled, s.EPGURL)
 			if s.Enabled {
 				// If EPGURL is already set, use it
@@ -434,7 +434,7 @@ func main() {
 
 	// Create MultiProvider
 	multiProvider := providers.NewMultiProviderWithConfig(cfg.RealDebridAPIKey, runtimeAddons, tmdbClient, proxies)
-	if currentSettings.DMMProviderEnabled {
+	if currentSettings.DMMProviderEnabled || currentSettings.DMMLibraryImportEnabled {
 		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
 	}
 	log.Printf("✓ Stream providers enabled: %v", multiProvider.ProviderNames)
@@ -558,6 +558,17 @@ func main() {
 	// Initialize MDBList sync service
 	mdbSyncService := services.NewMDBListSyncService(db, cfg.MDBListAPIKey, cfg.TMDBAPIKey)
 	log.Println("✓ MDBList sync service initialized")
+
+	dmmHashlistImporter := services.NewDMMHashlistImporter(
+		movieStore,
+		seriesStore,
+		episodeStore,
+		streamCacheStore,
+		tmdbClient,
+		func() *settings.Settings { return settingsManager.Get() },
+		"./cache/dmm",
+	)
+	log.Println("✓ DMM hashlist importer initialized")
 
 	// Worker context for graceful shutdown
 	workerCtx, workerCancel := context.WithCancel(context.Background())
@@ -758,6 +769,35 @@ func main() {
 		}
 	}()
 
+	// Worker: DMM Hashlist Import (hourly batches when enabled)
+	go func() {
+		interval := 1 * time.Hour
+		log.Printf("🧲 DMM Hashlist Import Worker: Starting (interval: %v)", interval)
+
+		timer := time.NewTimer(2 * time.Minute)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-timer.C:
+			}
+
+			current := settingsManager.Get()
+			if current != nil && current.DMMLibraryImportEnabled {
+				services.GlobalScheduler.MarkRunning(services.ServiceDMMHashlistImport)
+				_, err := dmmHashlistImporter.Import(workerCtx)
+				services.GlobalScheduler.MarkComplete(services.ServiceDMMHashlistImport, err, interval)
+				if err != nil {
+					log.Printf("❌ DMM hashlist import error: %v", err)
+				}
+			}
+
+			timer.Reset(interval)
+		}
+	}()
+
 	// Worker: Phase 1 Stream Checker (every hour)
 	if streamChecker != nil {
 		go func() {
@@ -848,6 +888,7 @@ func main() {
 		epgManager,
 		multiProvider,
 		mdbSyncService,
+		dmmHashlistImporter,
 		streamCacheStore,
 		streamService,
 		cacheScanner,

@@ -187,6 +187,7 @@ func (d *DMMDirectProvider) queryDMMAPI(url, mediaType string) ([]TorrentioStrea
 			Name:     result.Title,
 			Title:    result.Title,
 			InfoHash: result.Hash,
+			URL:      fmt.Sprintf("magnet:?xt=urn:btih:%s", strings.TrimSpace(result.Hash)),
 			Cached:   true, // DMM only returns cached torrents
 			Source:   "DMM",
 			Size:     int64(result.FileSize * 1024 * 1024), // Convert MB to bytes

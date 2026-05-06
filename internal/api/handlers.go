@@ -57,21 +57,22 @@ func versionResponseBase() map[string]interface{} {
 }
 
 type Handler struct {
-	movieStore      *database.MovieStore
-	seriesStore     *database.SeriesStore
-	episodeStore    *database.EpisodeStore
-	streamStore     *database.StreamStore
-	settingsStore   *database.SettingsStore
-	userStore       *database.UserStore
-	collectionStore *database.CollectionStore
-	blacklistStore  *database.BlacklistStore
-	tmdbClient      *services.TMDBClient
-	rdClient        *services.RealDebridClient
-	channelManager  *livetv.ChannelManager
-	settingsManager *settings.Manager
-	epgManager      *epg.Manager
-	streamProvider  *providers.MultiProvider
-	mdbSyncService  *services.MDBListSyncService
+	movieStore          *database.MovieStore
+	seriesStore         *database.SeriesStore
+	episodeStore        *database.EpisodeStore
+	streamStore         *database.StreamStore
+	settingsStore       *database.SettingsStore
+	userStore           *database.UserStore
+	collectionStore     *database.CollectionStore
+	blacklistStore      *database.BlacklistStore
+	tmdbClient          *services.TMDBClient
+	rdClient            *services.RealDebridClient
+	channelManager      *livetv.ChannelManager
+	settingsManager     *settings.Manager
+	epgManager          *epg.Manager
+	streamProvider      *providers.MultiProvider
+	mdbSyncService      *services.MDBListSyncService
+	dmmHashlistImporter *services.DMMHashlistImporter
 	// Phase 1: Smart Stream Caching
 	streamCacheStore *database.StreamCacheStore
 	streamService    interface{} // Will be *streams.StreamService if initialized
@@ -115,7 +116,7 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 		h.tmdbClient,
 		proxies,
 	)
-	if cfg.DMMProviderEnabled {
+	if cfg.DMMProviderEnabled || cfg.DMMLibraryImportEnabled {
 		h.streamProvider.EnableDMMDirect(cfg.RealDebridAPIKey, cfg.DMMProviderURL)
 	}
 
@@ -140,6 +141,9 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 
 	if h.mdbSyncService != nil {
 		h.mdbSyncService.UpdateAPIKeys(cfg.MDBListAPIKey, cfg.TMDBAPIKey)
+	}
+	if h.dmmHashlistImporter != nil {
+		h.dmmHashlistImporter.UpdateTMDBClient(h.tmdbClient)
 	}
 
 	if h.cacheScanner != nil {
@@ -281,31 +285,33 @@ func NewHandlerWithComponents(
 	epgManager *epg.Manager,
 	streamProvider *providers.MultiProvider,
 	mdbSyncService *services.MDBListSyncService,
+	dmmHashlistImporter *services.DMMHashlistImporter,
 	streamCacheStore *database.StreamCacheStore,
 	streamService interface{},
 	cacheScanner *CacheScanner,
 	runtimeConfig *config.Config,
 ) *Handler {
 	return &Handler{
-		movieStore:       movieStore,
-		seriesStore:      seriesStore,
-		episodeStore:     episodeStore,
-		streamStore:      streamStore,
-		settingsStore:    settingsStore,
-		userStore:        userStore,
-		collectionStore:  collectionStore,
-		blacklistStore:   blacklistStore,
-		tmdbClient:       tmdbClient,
-		rdClient:         rdClient,
-		channelManager:   channelManager,
-		settingsManager:  settingsManager,
-		epgManager:       epgManager,
-		streamProvider:   streamProvider,
-		mdbSyncService:   mdbSyncService,
-		streamCacheStore: streamCacheStore,
-		streamService:    streamService,
-		cacheScanner:     cacheScanner,
-		runtimeConfig:    runtimeConfig,
+		movieStore:          movieStore,
+		seriesStore:         seriesStore,
+		episodeStore:        episodeStore,
+		streamStore:         streamStore,
+		settingsStore:       settingsStore,
+		userStore:           userStore,
+		collectionStore:     collectionStore,
+		blacklistStore:      blacklistStore,
+		tmdbClient:          tmdbClient,
+		rdClient:            rdClient,
+		channelManager:      channelManager,
+		settingsManager:     settingsManager,
+		epgManager:          epgManager,
+		streamProvider:      streamProvider,
+		mdbSyncService:      mdbSyncService,
+		dmmHashlistImporter: dmmHashlistImporter,
+		streamCacheStore:    streamCacheStore,
+		streamService:       streamService,
+		cacheScanner:        cacheScanner,
+		runtimeConfig:       runtimeConfig,
 	}
 }
 
@@ -2956,7 +2962,10 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
-			log.Printf("[Settings] DMM full library import enabled; hashlist indexer hook is saved but importer worker is not active yet")
+			log.Printf("[Settings] DMM full library import enabled; starting hashlist importer batch")
+			if h.dmmHashlistImporter != nil {
+				go h.runService(services.ServiceDMMHashlistImport)
+			}
 		}
 
 		// Log playlist filter changes
@@ -4035,6 +4044,14 @@ func (h *Handler) runService(serviceName string) {
 		interval = 5 * time.Minute
 		if h.cacheScanner != nil {
 			err = h.cacheScanner.SyncPendingRealDebridLibraryAddsNow(ctx)
+		}
+
+	case services.ServiceDMMHashlistImport:
+		interval = 1 * time.Hour
+		if h.dmmHashlistImporter != nil {
+			_, err = h.dmmHashlistImporter.Import(ctx)
+		} else {
+			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")
 		}
 
 	default:

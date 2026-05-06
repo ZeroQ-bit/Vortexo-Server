@@ -2554,7 +2554,7 @@ export default function Settings() {
                 </h3>
                 <p className="text-sm text-slate-400">
                   Use DMM either as another cached stream source or as the
-                  source for the upcoming full hashlist library import.
+                  source for full hashlist library imports.
                 </p>
               </div>
 
@@ -2597,9 +2597,9 @@ export default function Settings() {
                       Full Library Import
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
-                      Reserve DMM hashlist import mode so the background
-                      indexer can add high-confidence movies and series after
-                      matching and exclusions.
+                      Scan DMM hashlists in background batches, verify
+                      Real-Debrid cache, then add high-confidence movies and
+                      series that pass your exclusions.
                     </div>
                   </div>
                   <input
@@ -2635,10 +2635,10 @@ export default function Settings() {
               </div>
 
               {settings.dmm_library_import_enabled && (
-                <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 p-4 text-sm text-yellow-100">
-                  Full library import is saved as a setting now. The background
-                  hashlist indexer still needs to be added before this imports
-                  items automatically.
+                <div className="rounded-lg border border-green-700/50 bg-green-900/20 p-4 text-sm text-green-100">
+                  Full library import is active. The DMM Hashlist Import service
+                  processes the public hashlist repo in batches and stores
+                  matched cached hashes in StreamArr's stream cache.
                 </div>
               )}
             </div>

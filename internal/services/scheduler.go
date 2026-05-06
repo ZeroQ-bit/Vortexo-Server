@@ -165,16 +165,17 @@ var GlobalScheduler = NewServiceScheduler()
 
 // Service name constants
 const (
-	ServicePlaylist       = "playlist_generation"
-	ServiceCacheCleanup   = "cache_cleanup"
-	ServiceEPGUpdate      = "epg_update"
-	ServiceChannelRefresh = "channel_refresh"
-	ServiceMDBListSync    = "mdblist_sync"
-	ServiceCollectionSync = "collection_sync"
-	ServiceEpisodeScan    = "episode_scan"
-	ServiceIPTVVODSync    = "iptv_vod_sync"
-	ServiceBalkanVODSync  = "balkan_vod_sync"
-	ServiceRDLibrarySync  = "rd_library_sync"
+	ServicePlaylist          = "playlist_generation"
+	ServiceCacheCleanup      = "cache_cleanup"
+	ServiceEPGUpdate         = "epg_update"
+	ServiceChannelRefresh    = "channel_refresh"
+	ServiceMDBListSync       = "mdblist_sync"
+	ServiceCollectionSync    = "collection_sync"
+	ServiceEpisodeScan       = "episode_scan"
+	ServiceIPTVVODSync       = "iptv_vod_sync"
+	ServiceBalkanVODSync     = "balkan_vod_sync"
+	ServiceRDLibrarySync     = "rd_library_sync"
+	ServiceDMMHashlistImport = "dmm_hashlist_import"
 )
 
 // InitializeDefaultServices sets up the default service definitions
@@ -189,4 +190,5 @@ func InitializeDefaultServices() {
 	GlobalScheduler.Register(ServiceIPTVVODSync, "Imports and cleans up IPTV VOD items", 12*time.Hour, true)
 	GlobalScheduler.Register(ServiceBalkanVODSync, "Imports Ex-Yu VOD content from Balkan GitHub repos", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceRDLibrarySync, "Adds cached library streams to Real-Debrid so playback links stay available", 5*time.Minute, true)
+	GlobalScheduler.Register(ServiceDMMHashlistImport, "Imports high-confidence cached movies and episodes from DMM hashlists", 1*time.Hour, true)
 }

@@ -2202,21 +2202,24 @@ func (h *XtreamHandler) playEpisodeByIMDB(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// DISABLED: RD direct API unreliable - Torrentio handles RD internally via resolve URL
-	// if stream.InfoHash != "" && h.rdClient != nil {
-	// 	log.Printf("[PLAY-RD] Attempting to get cached stream from Real-Debrid: %s", stream.InfoHash)
-	// 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-	// 	defer cancel()
-	//
-	// 	rdURL, err := h.rdClient.GetStreamURL(ctx, stream.InfoHash)
-	// 	if err == nil && rdURL != "" {
-	// 		elapsed = time.Since(startTime)
-	// 		log.Printf("[PLAY-RD] ✓ Got Real-Debrid direct link (%.2fs): %s", elapsed.Seconds(), rdURL)
-	// 		http.Redirect(w, r, rdURL, http.StatusFound)
-	// 		return
-	// 	}
-	// 	log.Printf("[PLAY-RD] ⚠️ Failed to get RD stream URL: %v", err)
-	// }
+	if stream.InfoHash != "" && h.rdClient != nil && (strings.EqualFold(stream.Source, "DMM") || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") || stream.URL == "") {
+		log.Printf("[PLAY-RD] Resolving DMM/magnet stream through Real-Debrid: %s", stream.InfoHash)
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+
+		rdURL, err := h.rdClient.GetStreamURL(ctx, stream.InfoHash)
+		if err == nil && rdURL != "" {
+			elapsed = time.Since(startTime)
+			log.Printf("[PLAY-RD] ✓ Got Real-Debrid direct link (%.2fs)", elapsed.Seconds())
+			http.Redirect(w, r, rdURL, http.StatusFound)
+			return
+		}
+		log.Printf("[PLAY-RD] ⚠️ Failed to resolve DMM/magnet stream through Real-Debrid: %v", err)
+		if stream.URL == "" || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") {
+			http.Error(w, "Real-Debrid stream not available", http.StatusNotFound)
+			return
+		}
+	}
 
 	// Fallback: Resolve stream URL if needed (Stremio addon URLs)
 	if stream.URL != "" {
@@ -2328,6 +2331,25 @@ func (h *XtreamHandler) playMovie(w http.ResponseWriter, r *http.Request, vodID 
 		return
 	}
 
+	if stream.InfoHash != "" && h.rdClient != nil && (strings.EqualFold(stream.Source, "DMM") || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") || stream.URL == "") {
+		log.Printf("[PLAY-RD] Resolving DMM/magnet movie stream through Real-Debrid: %s", stream.InfoHash)
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+
+		rdURL, err := h.rdClient.GetStreamURL(ctx, stream.InfoHash)
+		if err == nil && rdURL != "" {
+			elapsed = time.Since(startTime)
+			log.Printf("[PLAY-RD] ✓ Got Real-Debrid direct link (%.2fs)", elapsed.Seconds())
+			http.Redirect(w, r, rdURL, http.StatusFound)
+			return
+		}
+		log.Printf("[PLAY-RD] ⚠️ Failed to resolve DMM/magnet movie stream through Real-Debrid: %v", err)
+		if stream.URL == "" || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") {
+			http.Error(w, "Real-Debrid stream not available", http.StatusNotFound)
+			return
+		}
+	}
+
 	// Resolve stream URL from addon (Torrentio has built-in RD support)
 	if stream.URL != "" {
 		finalURL, err := h.resolveStremioURL(stream.URL)
@@ -2400,6 +2422,22 @@ func (h *XtreamHandler) playEpisode(w http.ResponseWriter, r *http.Request, seri
 		log.Printf("Error getting stream: %v", err)
 		http.Error(w, "Stream not available", http.StatusNotFound)
 		return
+	}
+
+	if stream.InfoHash != "" && h.rdClient != nil && (strings.EqualFold(stream.Source, "DMM") || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") || stream.URL == "") {
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		defer cancel()
+
+		rdURL, err := h.rdClient.GetStreamURL(ctx, stream.InfoHash)
+		if err == nil && rdURL != "" {
+			http.Redirect(w, r, rdURL, http.StatusFound)
+			return
+		}
+		log.Printf("[PLAY-RD] Failed to resolve DMM/magnet episode stream through Real-Debrid: %v", err)
+		if stream.URL == "" || strings.HasPrefix(strings.ToLower(stream.URL), "magnet:") {
+			http.Error(w, "Real-Debrid stream not available", http.StatusNotFound)
+			return
+		}
 	}
 
 	// Redirect to stream URL

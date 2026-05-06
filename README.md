@@ -54,7 +54,7 @@ StreamArr is not meant to be a traditional downloader. It tracks metadata, check
 
 ## 🆕 What We Added Recently
 
-- **DMM provider hooks** for Real-Debrid cached hash lookups
+- **DMM provider and hashlist import** for Real-Debrid cached hash lookups and high-confidence library seeding
 - **Recovery and filtering guards** for malformed hashes, junk torrents, and unreleased media
 - **Faster background services** for Real-Debrid sync and cache scanning
 - **Safer library cleanup tools** for filter mismatches and missing Real-Debrid items
@@ -80,6 +80,7 @@ StreamArr is not meant to be a traditional downloader. It tracks metadata, check
 ### 🧩 Debrid Workflow
 - **Real-Debrid Library Sync** — Adds the best cached library streams into your RD account when enabled
 - **DMM Provider Mode** — Uses DMM-style cached hash lookups as another stream source
+- **DMM Hashlist Import** — Scans public DMM hashlists in batches, verifies hashes are still cached on Real-Debrid, matches high-confidence movies/episodes to TMDB, and writes stream-cache rows for IPTV availability filters
 - **Safer Stream Filtering** — Skips unreleased titles and retires obviously broken payloads such as subtitle-only or image-only results
 - **Configurable Workers** — RD library sync and cache scanning can run on short recurring intervals
 
@@ -272,6 +273,7 @@ Add Stremio-compatible provider URLs:
 - **Real-Debrid Library Sync** adds the best cached library stream into your RD library when enabled
 - **Stream cache checks** mark movies and episodes as available or unavailable for IPTV filters
 - **DMM Provider Mode** can be enabled to query cached hash data as another stream source
+- **DMM Hashlist Import** adds high-confidence movies and series from public DMM hashlists after Real-Debrid cache checks and your content/release exclusions
 - **Important:** Plex-visible folders are handled outside StreamArr; use Riven or another filesystem library manager for that workflow
 
 ---
