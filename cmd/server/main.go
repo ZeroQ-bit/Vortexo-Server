@@ -129,9 +129,6 @@ func main() {
 	// Override config with ALL settings from database
 	appSettings := settingsManager.Get()
 
-	rdMountManager := services.NewRDMountManager(settingsManager)
-	rdMountManager.Start()
-
 	// API Keys
 	if appSettings.TMDBAPIKey != "" {
 		cfg.TMDBAPIKey = appSettings.TMDBAPIKey
@@ -790,7 +787,6 @@ func main() {
 
 	// Initialize cache scanner service (finds upgrades and fills empty cache)
 	var cacheScanner *api.CacheScanner
-	var plexExporter *services.PlexExporter
 	if streamCacheStore != nil && streamService != nil && debridService != nil && multiProvider != nil {
 		cacheScanner = api.NewCacheScanner(
 			movieStore,
@@ -835,17 +831,6 @@ func main() {
 		}()
 	}
 
-	if streamCacheStore != nil && settingsManager != nil {
-		plexExporter = services.NewPlexExporter(
-			movieStore,
-			seriesStore,
-			streamCacheStore,
-			settingsManager,
-		)
-		plexExporter.Start()
-		log.Println("✓ Plex exporter initialized")
-	}
-
 	// Initialize API handler with all components including Phase 1 services
 	handler := api.NewHandlerWithComponents(
 		movieStore,
@@ -866,7 +851,6 @@ func main() {
 		streamCacheStore,
 		streamService,
 		cacheScanner,
-		plexExporter,
 		cfg,
 	)
 
@@ -919,7 +903,6 @@ func main() {
 
 	// Stop background workers
 	workerCancel()
-	rdMountManager.Stop()
 
 	// Graceful shutdown with 30 second timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

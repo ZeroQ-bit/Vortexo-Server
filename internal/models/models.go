@@ -170,10 +170,6 @@ type CachedStream struct {
 	RDLibraryAdded   bool       `json:"rd_library_added"`
 	RDTorrentID      string     `json:"rd_torrent_id"`
 	RDLibraryAddedAt *time.Time `json:"rd_library_added_at,omitempty"`
-	PlexExported     bool       `json:"plex_exported"`
-	PlexExportPath   string     `json:"plex_export_path"`
-	PlexExportedAt   *time.Time `json:"plex_exported_at,omitempty"`
-	PlexExportError  string     `json:"plex_export_error"`
 	NextCheckAt      time.Time  `json:"next_check_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`

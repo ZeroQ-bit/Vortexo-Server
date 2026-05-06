@@ -19,7 +19,6 @@ const cachedStreamSelectColumns = `
 	media_streams.resolution, media_streams.hdr_type, media_streams.audio_format, media_streams.source_type, media_streams.file_size_gb,
 	media_streams.codec, media_streams.indexer, media_streams.cached_at, media_streams.last_checked, media_streams.check_count,
 	media_streams.is_available, media_streams.upgrade_available, media_streams.rd_library_added, media_streams.rd_torrent_id, media_streams.rd_library_added_at,
-	media_streams.plex_exported, media_streams.plex_export_path, media_streams.plex_exported_at, media_streams.plex_export_error,
 	media_streams.next_check_at, media_streams.created_at, media_streams.updated_at
 `
 
@@ -97,22 +96,6 @@ func (s *StreamCacheStore) CacheStream(ctx context.Context, movieID int, stream 
 			rd_library_added_at = CASE
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_library_added_at
-			END,
-			plex_exported = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
-				ELSE media_streams.plex_exported
-			END,
-			plex_export_path = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-				ELSE media_streams.plex_export_path
-			END,
-			plex_exported_at = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-				ELSE media_streams.plex_exported_at
-			END,
-			plex_export_error = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-				ELSE media_streams.plex_export_error
 			END,
 			next_check_at = NOW() + INTERVAL '7 days',
 			updated_at = NOW()
@@ -500,193 +483,17 @@ func (s *StreamCacheStore) GetPendingRealDebridLibraryAdds(ctx context.Context, 
 	return streams, nil
 }
 
-// GetPendingPlexExports retrieves cached streams that are ready to export into Plex-visible paths.
-func (s *StreamCacheStore) GetPendingPlexExports(ctx context.Context, limit int) ([]*models.CachedStream, error) {
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM media_streams
-		LEFT JOIN library_movies m ON m.id = media_streams.movie_id
-		LEFT JOIN library_series srs ON srs.id = media_streams.series_id
-		WHERE is_available = true
-		  AND rd_library_added = true
-		  AND plex_exported = false
-		  AND (
-			media_type <> 'movie'
-			OR COALESCE(NULLIF(m.metadata->>'release_date', '')::timestamptz <= NOW(), true)
-		  )
-		  AND (
-			media_type <> 'series'
-			OR COALESCE(NULLIF(srs.metadata->>'first_air_date', '')::timestamptz <= NOW(), true)
-		  )
-		ORDER BY updated_at ASC
-		LIMIT $1
-	`, cachedStreamSelectColumns)
-
-	rows, err := s.db.QueryContext(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get pending Plex exports: %w", err)
-	}
-	defer rows.Close()
-
-	var streams []*models.CachedStream
-	for rows.Next() {
-		cached := &models.CachedStream{}
-		if err := scanCachedStream(rows, cached); err != nil {
-			return nil, fmt.Errorf("failed to scan pending Plex export: %w", err)
-		}
-		streams = append(streams, cached)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating pending Plex exports: %w", err)
-	}
-
-	return streams, nil
-}
-
-// GetPlexExportsForReconciliation retrieves exported Plex entries that still
-// point at a Real-Debrid torrent. The caller can verify whether the remote
-// torrent and local symlink are still valid.
-func (s *StreamCacheStore) GetPlexExportsForReconciliation(ctx context.Context, limit int) ([]*models.CachedStream, error) {
-	query := fmt.Sprintf(`
-		SELECT %s
-		FROM media_streams
-		WHERE is_available = true
-		  AND rd_library_added = true
-		  AND COALESCE(rd_torrent_id, '') <> ''
-		  AND plex_exported = true
-		ORDER BY updated_at ASC
-		LIMIT $1
-	`, cachedStreamSelectColumns)
-
-	rows, err := s.db.QueryContext(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Plex exports for reconciliation: %w", err)
-	}
-	defer rows.Close()
-
-	var streams []*models.CachedStream
-	for rows.Next() {
-		cached := &models.CachedStream{}
-		if err := scanCachedStream(rows, cached); err != nil {
-			return nil, fmt.Errorf("failed to scan Plex export for reconciliation: %w", err)
-		}
-		streams = append(streams, cached)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating Plex exports for reconciliation: %w", err)
-	}
-
-	return streams, nil
-}
-
-func (s *StreamCacheStore) MarkPlexExportVerifiedByID(ctx context.Context, cacheID int) error {
-	query := `
-		UPDATE media_streams
-		SET plex_export_error = '',
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cacheID)
-	if err != nil {
-		return fmt.Errorf("failed to mark Plex export verified: %w", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("no stream found for cache id %d", cacheID)
-	}
-
-	return nil
-}
-
-func (s *StreamCacheStore) ResetPlexExportByCacheID(ctx context.Context, cacheID int, exportErr string) error {
-	query := `
-		UPDATE media_streams
-		SET plex_exported = false,
-		    plex_export_path = '',
-		    plex_exported_at = NULL,
-		    plex_export_error = $2,
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cacheID, exportErr)
-	if err != nil {
-		return fmt.Errorf("failed to reset Plex export state: %w", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("no stream found for cache id %d", cacheID)
-	}
-
-	return nil
-}
-
-func (s *StreamCacheStore) MarkPlexExportedByID(ctx context.Context, cacheID int, exportPath string) error {
-	query := `
-		UPDATE media_streams
-		SET plex_exported = true,
-		    plex_export_path = $2,
-		    plex_exported_at = NOW(),
-		    plex_export_error = '',
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cacheID, exportPath)
-	if err != nil {
-		return fmt.Errorf("failed to mark Plex export: %w", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("no stream found for cache id %d", cacheID)
-	}
-
-	return nil
-}
-
-func (s *StreamCacheStore) MarkPlexExportFailedByID(ctx context.Context, cacheID int, exportErr string) error {
-	query := `
-		UPDATE media_streams
-		SET plex_exported = false,
-		    plex_export_error = $2,
-		    updated_at = NOW()
-		WHERE id = $1
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cacheID, exportErr)
-	if err != nil {
-		return fmt.Errorf("failed to mark Plex export failure: %w", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return fmt.Errorf("no stream found for cache id %d", cacheID)
-	}
-
-	return nil
-}
-
-func (s *StreamCacheStore) ResetRDLibraryByCacheID(ctx context.Context, cacheID int, exportErr string) error {
+func (s *StreamCacheStore) ResetRDLibraryByCacheID(ctx context.Context, cacheID int, _ string) error {
 	query := `
 		UPDATE media_streams
 		SET rd_library_added = false,
 		    rd_torrent_id = NULL,
 		    rd_library_added_at = NULL,
-		    plex_exported = false,
-		    plex_export_path = '',
-		    plex_exported_at = NULL,
-		    plex_export_error = $2,
 		    updated_at = NOW()
 		WHERE id = $1
 	`
 
-	result, err := s.db.ExecContext(ctx, query, cacheID, exportErr)
+	result, err := s.db.ExecContext(ctx, query, cacheID)
 	if err != nil {
 		return fmt.Errorf("failed to reset RD library state: %w", err)
 	}
@@ -701,16 +508,12 @@ func (s *StreamCacheStore) ResetRDLibraryByCacheID(ctx context.Context, cacheID 
 
 // ResetRDLibraryMissingFrom clears local Real-Debrid library state for cached
 // streams whose tracked RD torrent ID is no longer present in the account.
-func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validTorrentIDs map[string]struct{}, exportErr string) (int64, error) {
+func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validTorrentIDs map[string]struct{}, _ string) (int64, error) {
 	baseSet := `
 		UPDATE media_streams
 		SET rd_library_added = false,
 		    rd_torrent_id = NULL,
 		    rd_library_added_at = NULL,
-		    plex_exported = false,
-		    plex_export_path = '',
-		    plex_exported_at = NULL,
-		    plex_export_error = $1,
 		    updated_at = NOW()
 		WHERE rd_library_added = true
 	`
@@ -721,7 +524,7 @@ func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validT
 	)
 
 	if len(validTorrentIDs) == 0 {
-		result, err = s.db.ExecContext(ctx, baseSet, exportErr)
+		result, err = s.db.ExecContext(ctx, baseSet)
 	} else {
 		ids := make([]string, 0, len(validTorrentIDs))
 		for id := range validTorrentIDs {
@@ -730,14 +533,14 @@ func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validT
 			}
 		}
 		if len(ids) == 0 {
-			result, err = s.db.ExecContext(ctx, baseSet, exportErr)
+			result, err = s.db.ExecContext(ctx, baseSet)
 		} else {
 			result, err = s.db.ExecContext(ctx, baseSet+`
 		  AND (
 		    COALESCE(rd_torrent_id, '') = ''
-		    OR NOT (rd_torrent_id = ANY($2))
+		    OR NOT (rd_torrent_id = ANY($1))
 		  )
-		`, exportErr, pq.Array(ids))
+		`, pq.Array(ids))
 		}
 	}
 
@@ -752,17 +555,13 @@ func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validT
 	return rows, nil
 }
 
-func (s *StreamCacheStore) MarkUnavailableByCacheID(ctx context.Context, cacheID int, exportErr string) error {
+func (s *StreamCacheStore) MarkUnavailableByCacheID(ctx context.Context, cacheID int, _ string) error {
 	query := `
 		UPDATE media_streams
 		SET is_available = false,
 		    rd_library_added = false,
 		    rd_torrent_id = NULL,
 		    rd_library_added_at = NULL,
-		    plex_exported = false,
-		    plex_export_path = '',
-		    plex_exported_at = NULL,
-		    plex_export_error = $2,
 		    last_checked = NOW(),
 		    check_count = check_count + 1,
 		    next_check_at = NOW() + INTERVAL '1 day',
@@ -770,7 +569,7 @@ func (s *StreamCacheStore) MarkUnavailableByCacheID(ctx context.Context, cacheID
 		WHERE id = $1
 	`
 
-	result, err := s.db.ExecContext(ctx, query, cacheID, exportErr)
+	result, err := s.db.ExecContext(ctx, query, cacheID)
 	if err != nil {
 		return fmt.Errorf("failed to mark cache entry unavailable: %w", err)
 	}
@@ -828,7 +627,6 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 	var episode sql.NullInt64
 	var rdTorrentID sql.NullString
 	var rdLibraryAddedAt sql.NullTime
-	var plexExportedAt sql.NullTime
 
 	if err := scanner.Scan(
 		&cached.ID,
@@ -856,10 +654,6 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 		&cached.RDLibraryAdded,
 		&rdTorrentID,
 		&rdLibraryAddedAt,
-		&cached.PlexExported,
-		&cached.PlexExportPath,
-		&plexExportedAt,
-		&cached.PlexExportError,
 		&cached.NextCheckAt,
 		&cached.CreatedAt,
 		&cached.UpdatedAt,
@@ -877,12 +671,6 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 		cached.RDLibraryAddedAt = &rdLibraryAddedAt.Time
 	} else {
 		cached.RDLibraryAddedAt = nil
-	}
-
-	if plexExportedAt.Valid {
-		cached.PlexExportedAt = &plexExportedAt.Time
-	} else {
-		cached.PlexExportedAt = nil
 	}
 
 	if movieID.Valid {

@@ -580,22 +580,6 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_library_added_at
 			END,
-			plex_exported = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
-				ELSE media_streams.plex_exported
-			END,
-			plex_export_path = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-				ELSE media_streams.plex_export_path
-			END,
-			plex_exported_at = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-				ELSE media_streams.plex_exported_at
-			END,
-			plex_export_error = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN ''
-				ELSE media_streams.plex_export_error
-			END,
 			updated_at = NOW()
 	`
 

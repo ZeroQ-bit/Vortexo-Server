@@ -175,7 +175,6 @@ const (
 	ServiceIPTVVODSync    = "iptv_vod_sync"
 	ServiceBalkanVODSync  = "balkan_vod_sync"
 	ServiceRDLibrarySync  = "rd_library_sync"
-	ServicePlexExport     = "plex_export"
 )
 
 // InitializeDefaultServices sets up the default service definitions
@@ -189,6 +188,5 @@ func InitializeDefaultServices() {
 	GlobalScheduler.Register(ServiceEpisodeScan, "Fetches episode metadata from TMDB for all series", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceIPTVVODSync, "Imports and cleans up IPTV VOD items", 12*time.Hour, true)
 	GlobalScheduler.Register(ServiceBalkanVODSync, "Imports Ex-Yu VOD content from Balkan GitHub repos", 24*time.Hour, true)
-	GlobalScheduler.Register(ServiceRDLibrarySync, "Adds cached library streams to Real-Debrid so Plex export has items to materialize", 5*time.Minute, true)
-	GlobalScheduler.Register(ServicePlexExport, "Exports cached library items into Plex-visible paths and reconciles stale Real-Debrid links", 15*time.Minute, true)
+	GlobalScheduler.Register(ServiceRDLibrarySync, "Adds cached library streams to Real-Debrid so playback links stay available", 5*time.Minute, true)
 }

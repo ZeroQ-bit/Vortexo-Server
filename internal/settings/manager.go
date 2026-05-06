@@ -93,17 +93,6 @@ type Settings struct {
 	OnlyCachedStreams              bool   `json:"only_cached_streams"`                 // Only include media with cached streams in Stream Cache Monitor
 	OnlyReleasedContent            bool   `json:"only_released_content"`               // Only include released content in IPTV playlist
 	AutoAddBestStreamsToRealDebrid bool   `json:"auto_add_best_streams_to_realdebrid"` // Add the best discovered library stream to the user's Real-Debrid account
-	PlexExportEnabled              bool   `json:"plex_export_enabled"`                 // Export cached library items into Plex-visible paths
-	PlexExportIntervalMinutes      int    `json:"plex_export_interval_minutes"`        // How often to run the Plex export worker
-	PlexExportMode                 string `json:"plex_export_mode"`                    // Export mode (symlink for now)
-	PlexExportRDMountPath          string `json:"plex_export_rd_mount_path"`           // Mounted Real-Debrid/Zurg library root
-	PlexExportMoviesPath           string `json:"plex_export_movies_path"`             // Plex movies library root
-	PlexExportShowsPath            string `json:"plex_export_shows_path"`              // Plex shows library root
-	PlexRefreshEnabled             bool   `json:"plex_refresh_enabled"`                // Trigger Plex refresh after export
-	PlexURL                        string `json:"plex_url"`                            // Plex server URL
-	PlexToken                      string `json:"plex_token"`                          // Plex auth token
-	PlexMoviesSectionID            string `json:"plex_movies_section_id"`              // Plex movies section id
-	PlexShowsSectionID             string `json:"plex_shows_section_id"`               // Plex shows section id
 
 	// Content Filters
 	BlockBollywood bool `json:"block_bollywood"` // Block Indian-origin (Bollywood) media from import and playlists
@@ -245,17 +234,6 @@ func getDefaultSettings() *Settings {
 		IPTVVODFastImport:              false,
 		ImportAdultVODFromGitHub:       false,
 		AutoAddBestStreamsToRealDebrid: false,
-		PlexExportEnabled:              false,
-		PlexExportIntervalMinutes:      15,
-		PlexExportMode:                 "symlink",
-		PlexExportRDMountPath:          "/mount/rd",
-		PlexExportMoviesPath:           "/mount/movies",
-		PlexExportShowsPath:            "/mount/shows",
-		PlexRefreshEnabled:             false,
-		PlexURL:                        "",
-		PlexToken:                      "",
-		PlexMoviesSectionID:            "",
-		PlexShowsSectionID:             "",
 		// Content Filters
 		BlockBollywood:              false,
 		BalkanVODEnabled:            false,      // Disabled by default - users need to enable
@@ -693,17 +671,6 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"only_released_content":               m.settings.OnlyReleasedContent,
 		"hide_unavailable_content":            m.settings.HideUnavailableContent,
 		"auto_add_best_streams_to_realdebrid": m.settings.AutoAddBestStreamsToRealDebrid,
-		"plex_export_enabled":                 m.settings.PlexExportEnabled,
-		"plex_export_interval_minutes":        m.settings.PlexExportIntervalMinutes,
-		"plex_export_mode":                    m.settings.PlexExportMode,
-		"plex_export_rd_mount_path":           m.settings.PlexExportRDMountPath,
-		"plex_export_movies_path":             m.settings.PlexExportMoviesPath,
-		"plex_export_shows_path":              m.settings.PlexExportShowsPath,
-		"plex_refresh_enabled":                m.settings.PlexRefreshEnabled,
-		"plex_url":                            m.settings.PlexURL,
-		"plex_token":                          m.settings.PlexToken,
-		"plex_movies_section_id":              m.settings.PlexMoviesSectionID,
-		"plex_shows_section_id":               m.settings.PlexShowsSectionID,
 		"block_bollywood":                     m.settings.BlockBollywood,
 		"debug":                               m.settings.Debug,
 		"language":                            m.settings.Language,
@@ -814,39 +781,6 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["auto_add_best_streams_to_realdebrid"].(bool); ok {
 		m.settings.AutoAddBestStreamsToRealDebrid = v
-	}
-	if v, ok := updates["plex_export_enabled"].(bool); ok {
-		m.settings.PlexExportEnabled = v
-	}
-	if v, ok := updates["plex_export_interval_minutes"].(float64); ok {
-		m.settings.PlexExportIntervalMinutes = int(v)
-	}
-	if v, ok := updates["plex_export_mode"].(string); ok {
-		m.settings.PlexExportMode = v
-	}
-	if v, ok := updates["plex_export_rd_mount_path"].(string); ok {
-		m.settings.PlexExportRDMountPath = v
-	}
-	if v, ok := updates["plex_export_movies_path"].(string); ok {
-		m.settings.PlexExportMoviesPath = v
-	}
-	if v, ok := updates["plex_export_shows_path"].(string); ok {
-		m.settings.PlexExportShowsPath = v
-	}
-	if v, ok := updates["plex_refresh_enabled"].(bool); ok {
-		m.settings.PlexRefreshEnabled = v
-	}
-	if v, ok := updates["plex_url"].(string); ok {
-		m.settings.PlexURL = v
-	}
-	if v, ok := updates["plex_token"].(string); ok {
-		m.settings.PlexToken = v
-	}
-	if v, ok := updates["plex_movies_section_id"].(string); ok {
-		m.settings.PlexMoviesSectionID = v
-	}
-	if v, ok := updates["plex_shows_section_id"].(string); ok {
-		m.settings.PlexShowsSectionID = v
 	}
 	if v, ok := updates["block_bollywood"].(bool); ok {
 		m.settings.BlockBollywood = v

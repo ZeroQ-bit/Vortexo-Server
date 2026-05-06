@@ -76,7 +76,6 @@ type Handler struct {
 	streamCacheStore *database.StreamCacheStore
 	streamService    interface{} // Will be *streams.StreamService if initialized
 	cacheScanner     *CacheScanner
-	plexExporter     *services.PlexExporter
 	runtimeConfig    *config.Config
 }
 
@@ -285,7 +284,6 @@ func NewHandlerWithComponents(
 	streamCacheStore *database.StreamCacheStore,
 	streamService interface{},
 	cacheScanner *CacheScanner,
-	plexExporter *services.PlexExporter,
 	runtimeConfig *config.Config,
 ) *Handler {
 	return &Handler{
@@ -307,7 +305,6 @@ func NewHandlerWithComponents(
 		streamCacheStore: streamCacheStore,
 		streamService:    streamService,
 		cacheScanner:     cacheScanner,
-		plexExporter:     plexExporter,
 		runtimeConfig:    runtimeConfig,
 	}
 }
@@ -2958,15 +2955,6 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 
-		if h.plexExporter != nil && !oldSettings.PlexExportEnabled && newSettings.PlexExportEnabled {
-			go func() {
-				log.Println("[Settings] Plex export enabled, starting background export...")
-				if err := h.plexExporter.ExportPending(context.Background()); err != nil {
-					log.Printf("[Settings] Plex export run failed: %v", err)
-				}
-			}()
-		}
-
 		if !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
 			log.Printf("[Settings] DMM full library import enabled; hashlist indexer hook is saved but importer worker is not active yet")
 		}
@@ -4047,16 +4035,6 @@ func (h *Handler) runService(serviceName string) {
 		interval = 5 * time.Minute
 		if h.cacheScanner != nil {
 			err = h.cacheScanner.SyncPendingRealDebridLibraryAddsNow(ctx)
-		}
-
-	case services.ServicePlexExport:
-		interval = 15 * time.Minute
-		if h.settingsManager != nil {
-			current := h.settingsManager.Get()
-			interval = time.Duration(maxInt(current.PlexExportIntervalMinutes, 1)) * time.Minute
-		}
-		if h.plexExporter != nil {
-			err = h.plexExporter.ExportPending(ctx)
 		}
 
 	default:
