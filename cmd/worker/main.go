@@ -122,6 +122,10 @@ func main() {
 		tmdbClient,
 		proxies,
 	)
+	currentSettings := settingsManager.Get()
+	if currentSettings.DMMProviderEnabled {
+		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
+	}
 
 	// Initialize cache manager
 	cacheManager := cache.NewManager(db)

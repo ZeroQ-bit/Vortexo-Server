@@ -108,6 +108,19 @@ func NewMultiProviderWithConfig(rdAPIKey string, addons []StremioAddon, tmdbClie
 	return mp
 }
 
+// EnableDMMDirect appends Debrid Media Manager as an additional cached stream provider.
+func (mp *MultiProvider) EnableDMMDirect(rdAPIKey, dmmURL string) {
+	if mp == nil {
+		return
+	}
+
+	provider := NewDMMDirectProviderWithURL(rdAPIKey, dmmURL)
+	mp.Providers = append(mp.Providers, provider)
+	mp.ProviderNames = append(mp.ProviderNames, "DMM")
+	mp.dmmDirectProvider = provider
+	log.Printf("✓ DMM direct provider loaded (%s)", provider.DMMURL)
+}
+
 // BuildRuntimeAddons normalizes the saved addon list and bootstraps a sane
 // default for Real-Debrid-backed installs when no explicit provider addons are
 // enabled yet.

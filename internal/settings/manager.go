@@ -138,6 +138,11 @@ type Settings struct {
 	CometPriorityLanguages string `json:"comet_priority_languages"` // Comma-separated priority languages
 	CometMaxSize           string `json:"comet_max_size"`           // Max file size (e.g., "10GB" or "10GB,2GB")
 
+	// DMM Settings
+	DMMProviderEnabled      bool   `json:"dmm_provider_enabled"`       // Use Debrid Media Manager as an additional stream provider
+	DMMProviderURL          string `json:"dmm_provider_url"`           // DMM API base URL
+	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"` // Enable full DMM/hashlists library import once the importer is available
+
 	// Built-in Stremio Addon Settings
 	StremioAddon StremioAddonConfig `json:"stremio_addon"`
 
@@ -262,12 +267,15 @@ func getDefaultSettings() *Settings {
 		UsePremiumize:               false,
 		CometEnabled:                true,
 		CometIndexers:               "bitorrent,therarbg,yts,eztv,thepiratebay",
-		CometOnlyShowCached:         true,             // Default to only cached for faster playback
-		CometMaxResults:             5,                // Default to 5 results per quality
-		CometSortBy:                 "quality",        // Default sorting by quality then seeders
-		CometExcludedQualities:      "",               // No exclusions by default
-		CometPriorityLanguages:      "",               // No priority languages by default
-		CometMaxSize:                "",               // No size limit by default
+		CometOnlyShowCached:         true,      // Default to only cached for faster playback
+		CometMaxResults:             5,         // Default to 5 results per quality
+		CometSortBy:                 "quality", // Default sorting by quality then seeders
+		CometExcludedQualities:      "",        // No exclusions by default
+		CometPriorityLanguages:      "",        // No priority languages by default
+		CometMaxSize:                "",        // No size limit by default
+		DMMProviderEnabled:          false,
+		DMMProviderURL:              "https://debridmediamanager.com",
+		DMMLibraryImportEnabled:     false,
 		StremioAddons:               []StremioAddon{}, // Empty by default - users should configure their own addons
 		StremioAddon: StremioAddonConfig{
 			Enabled:         true, // Enabled by default for built-in addon
@@ -670,18 +678,21 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"comet_excluded_qualities":            m.settings.CometExcludedQualities,
 		"comet_priority_languages":            m.settings.CometPriorityLanguages,
 		"comet_max_size":                      m.settings.CometMaxSize,
-			"total_pages":                         m.settings.TotalPages,
-			"min_year":                            m.settings.MinYear,
-			"min_runtime":                         m.settings.MinRuntime,
-			"max_resolution":                      m.settings.MaxResolution,
-			"auto_cache_interval_hours":           m.settings.AutoCacheIntervalHours,
-			"user_create_playlist":                m.settings.UserCreatePlaylist,
-			"include_adult_vod":                   m.settings.IncludeAdultVOD,
-			"import_adult_vod_from_github":        m.settings.ImportAdultVODFromGitHub,
-			"only_cached_streams":                 m.settings.OnlyCachedStreams,
-			"only_released_content":               m.settings.OnlyReleasedContent,
-			"hide_unavailable_content":            m.settings.HideUnavailableContent,
-			"auto_add_best_streams_to_realdebrid": m.settings.AutoAddBestStreamsToRealDebrid,
+		"dmm_provider_enabled":                m.settings.DMMProviderEnabled,
+		"dmm_provider_url":                    m.settings.DMMProviderURL,
+		"dmm_library_import_enabled":          m.settings.DMMLibraryImportEnabled,
+		"total_pages":                         m.settings.TotalPages,
+		"min_year":                            m.settings.MinYear,
+		"min_runtime":                         m.settings.MinRuntime,
+		"max_resolution":                      m.settings.MaxResolution,
+		"auto_cache_interval_hours":           m.settings.AutoCacheIntervalHours,
+		"user_create_playlist":                m.settings.UserCreatePlaylist,
+		"include_adult_vod":                   m.settings.IncludeAdultVOD,
+		"import_adult_vod_from_github":        m.settings.ImportAdultVODFromGitHub,
+		"only_cached_streams":                 m.settings.OnlyCachedStreams,
+		"only_released_content":               m.settings.OnlyReleasedContent,
+		"hide_unavailable_content":            m.settings.HideUnavailableContent,
+		"auto_add_best_streams_to_realdebrid": m.settings.AutoAddBestStreamsToRealDebrid,
 		"plex_export_enabled":                 m.settings.PlexExportEnabled,
 		"plex_export_interval_minutes":        m.settings.PlexExportIntervalMinutes,
 		"plex_export_mode":                    m.settings.PlexExportMode,
@@ -759,39 +770,48 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	if v, ok := updates["comet_max_size"].(string); ok {
 		m.settings.CometMaxSize = v
 	}
-		if v, ok := updates["total_pages"].(float64); ok {
-			m.settings.TotalPages = int(v)
-		}
-		if v, ok := updates["min_year"].(float64); ok {
-			m.settings.MinYear = int(v)
-		}
-		if v, ok := updates["min_runtime"].(float64); ok {
-			m.settings.MinRuntime = int(v)
-		}
-		if v, ok := updates["max_resolution"].(float64); ok {
-			m.settings.MaxResolution = int(v)
-		}
+	if v, ok := updates["dmm_provider_enabled"].(bool); ok {
+		m.settings.DMMProviderEnabled = v
+	}
+	if v, ok := updates["dmm_provider_url"].(string); ok {
+		m.settings.DMMProviderURL = v
+	}
+	if v, ok := updates["dmm_library_import_enabled"].(bool); ok {
+		m.settings.DMMLibraryImportEnabled = v
+	}
+	if v, ok := updates["total_pages"].(float64); ok {
+		m.settings.TotalPages = int(v)
+	}
+	if v, ok := updates["min_year"].(float64); ok {
+		m.settings.MinYear = int(v)
+	}
+	if v, ok := updates["min_runtime"].(float64); ok {
+		m.settings.MinRuntime = int(v)
+	}
+	if v, ok := updates["max_resolution"].(float64); ok {
+		m.settings.MaxResolution = int(v)
+	}
 	if v, ok := updates["auto_cache_interval_hours"].(float64); ok {
 		m.settings.AutoCacheIntervalHours = int(v)
 	}
 	if v, ok := updates["user_create_playlist"].(bool); ok {
 		m.settings.UserCreatePlaylist = v
 	}
-		if v, ok := updates["include_adult_vod"].(bool); ok {
-			m.settings.IncludeAdultVOD = v
-		}
-		if v, ok := updates["import_adult_vod_from_github"].(bool); ok {
-			m.settings.ImportAdultVODFromGitHub = v
-		}
-		if v, ok := updates["only_cached_streams"].(bool); ok {
-			m.settings.OnlyCachedStreams = v
-		}
-		if v, ok := updates["only_released_content"].(bool); ok {
-			m.settings.OnlyReleasedContent = v
-		}
-		if v, ok := updates["hide_unavailable_content"].(bool); ok {
-			m.settings.HideUnavailableContent = v
-		}
+	if v, ok := updates["include_adult_vod"].(bool); ok {
+		m.settings.IncludeAdultVOD = v
+	}
+	if v, ok := updates["import_adult_vod_from_github"].(bool); ok {
+		m.settings.ImportAdultVODFromGitHub = v
+	}
+	if v, ok := updates["only_cached_streams"].(bool); ok {
+		m.settings.OnlyCachedStreams = v
+	}
+	if v, ok := updates["only_released_content"].(bool); ok {
+		m.settings.OnlyReleasedContent = v
+	}
+	if v, ok := updates["hide_unavailable_content"].(bool); ok {
+		m.settings.HideUnavailableContent = v
+	}
 	if v, ok := updates["auto_add_best_streams_to_realdebrid"].(bool); ok {
 		m.settings.AutoAddBestStreamsToRealDebrid = v
 	}

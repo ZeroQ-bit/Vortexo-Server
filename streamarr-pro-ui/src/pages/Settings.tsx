@@ -66,6 +66,9 @@ interface SettingsData {
   max_file_size: number;
   use_realdebrid: boolean;
   use_premiumize: boolean;
+  dmm_provider_enabled: boolean;
+  dmm_provider_url: string;
+  dmm_library_import_enabled: boolean;
   auto_add_best_streams_to_realdebrid: boolean;
   plex_export_enabled: boolean;
   plex_export_interval_minutes: number;
@@ -195,6 +198,7 @@ interface ServiceStatus {
 type TabType =
   | "account"
   | "integrations"
+  | "dmm"
   | "content"
   | "livetv"
   | "services"
@@ -428,6 +432,7 @@ export default function Settings() {
   const tabs = [
     { id: "account" as TabType, label: "Account", icon: User },
     { id: "integrations" as TabType, label: "Integrations", icon: Layers },
+    { id: "dmm" as TabType, label: "DMM", icon: Database },
     { id: "content" as TabType, label: "Content", icon: Film },
     { id: "livetv" as TabType, label: "TV & IPTV", icon: Tv },
     { id: "services" as TabType, label: "Services", icon: Activity },
@@ -479,6 +484,13 @@ export default function Settings() {
       ) {
         data.xtream_password = "streamarr";
       }
+      if (!data.dmm_provider_url) {
+        data.dmm_provider_url = "https://debridmediamanager.com";
+      }
+      data.dmm_provider_enabled = Boolean(data.dmm_provider_enabled);
+      data.dmm_library_import_enabled = Boolean(
+        data.dmm_library_import_enabled,
+      );
 
       setSettings(data);
 
@@ -2713,6 +2725,107 @@ export default function Settings() {
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* DMM TAB */}
+        {activeTab === "dmm" && (
+          <div className="bg-[#1e1e1e] rounded-xl p-6 border border-white/10">
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-white mb-2">
+                  Debrid Media Manager
+                </h3>
+                <p className="text-sm text-slate-400">
+                  Use DMM either as another cached stream source or as the
+                  source for the upcoming full hashlist library import.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <label
+                  className={`flex items-start justify-between gap-4 rounded-xl border p-5 cursor-pointer transition-colors ${
+                    settings.dmm_provider_enabled
+                      ? "bg-green-900/30 border-green-700"
+                      : "bg-[#2a2a2a]/50 border-white/10"
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      DMM Provider Only
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Query DMM for cached torrents when StreamArr looks for
+                      streams. This does not add new movies or series by itself.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.dmm_provider_enabled || false}
+                    onChange={(e) =>
+                      updateSetting("dmm_provider_enabled", e.target.checked)
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                </label>
+
+                <label
+                  className={`flex items-start justify-between gap-4 rounded-xl border p-5 cursor-pointer transition-colors ${
+                    settings.dmm_library_import_enabled
+                      ? "bg-yellow-900/30 border-yellow-700"
+                      : "bg-[#2a2a2a]/50 border-white/10"
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Full Library Import
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Reserve DMM hashlist import mode so the background
+                      indexer can add high-confidence movies and series after
+                      matching and exclusions.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.dmm_library_import_enabled || false}
+                    onChange={(e) =>
+                      updateSetting(
+                        "dmm_library_import_enabled",
+                        e.target.checked,
+                      )
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  DMM API URL
+                </label>
+                <input
+                  type="text"
+                  value={settings.dmm_provider_url || ""}
+                  onChange={(e) =>
+                    updateSetting("dmm_provider_url", e.target.value)
+                  }
+                  className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  placeholder="https://debridmediamanager.com"
+                />
+                <p className="text-xs text-slate-500 mt-2">
+                  Use the public DMM site or a self-hosted DMM base URL.
+                </p>
+              </div>
+
+              {settings.dmm_library_import_enabled && (
+                <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 p-4 text-sm text-yellow-100">
+                  Full library import is saved as a setting now. The background
+                  hashlist indexer still needs to be added before this imports
+                  items automatically.
+                </div>
+              )}
             </div>
           </div>
         )}

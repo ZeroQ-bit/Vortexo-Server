@@ -116,6 +116,9 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 		h.tmdbClient,
 		proxies,
 	)
+	if cfg.DMMProviderEnabled {
+		h.streamProvider.EnableDMMDirect(cfg.RealDebridAPIKey, cfg.DMMProviderURL)
+	}
 
 	if h.streamProvider != nil && h.settingsManager != nil {
 		h.streamProvider.SetSortSettings(
@@ -2916,12 +2919,14 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		log.Printf(
-			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v",
+			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v",
 			newSettings.StremioAddon.Enabled,
 			len(newSettings.StremioAddons),
 			enabledProviderAddons,
 			newSettings.UseRealDebrid,
 			strings.TrimSpace(newSettings.RealDebridAPIKey) != "",
+			newSettings.DMMProviderEnabled,
+			newSettings.DMMLibraryImportEnabled,
 		)
 
 		// Get old settings to detect changes
@@ -2960,6 +2965,10 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 					log.Printf("[Settings] Plex export run failed: %v", err)
 				}
 			}()
+		}
+
+		if !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
+			log.Printf("[Settings] DMM full library import enabled; hashlist indexer hook is saved but importer worker is not active yet")
 		}
 
 		// Log playlist filter changes

@@ -57,6 +57,11 @@ type SettingsResponse struct {
 	MediaFusionEnabled bool   `json:"mediafusion_enabled"`
 	TorrentioProviders string `json:"torrentio_providers"`
 
+	// DMM
+	DMMProviderEnabled      bool   `json:"dmm_provider_enabled"`
+	DMMProviderURL          string `json:"dmm_provider_url"`
+	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"`
+
 	// Removed Comet Provider Settings
 
 	// Content Sources (GitHub lists)

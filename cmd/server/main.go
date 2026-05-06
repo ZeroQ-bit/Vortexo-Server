@@ -437,6 +437,9 @@ func main() {
 
 	// Create MultiProvider
 	multiProvider := providers.NewMultiProviderWithConfig(cfg.RealDebridAPIKey, runtimeAddons, tmdbClient, proxies)
+	if currentSettings.DMMProviderEnabled {
+		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
+	}
 	log.Printf("✓ Stream providers enabled: %v", multiProvider.ProviderNames)
 
 	// Phase 1: Initialize stream checker with provider integration
