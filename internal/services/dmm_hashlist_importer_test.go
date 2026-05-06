@@ -1,6 +1,10 @@
 package services
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Zerr0-C00L/StreamArr/internal/models"
+)
 
 func TestDecodeDMMHashlistHTML(t *testing.T) {
 	const compressed = "N4IgLglmA2CmIC4QBVYGcwAIAyEMgBpwB7AJ1NgDsw1EBtUAMwjkoEMBbeJAUQA9OABzgA6ALLEAbhFgiATAAY5AFhEBGBQA4FgkQHUeAIQC0AEWwiOAa0mEQACzZp7iEGwBGAYwAmsRmrkAZmUAVgA2AHZNAE4FDx8-AODwqNj43385O3cATzB0RCTQyJiFAF8AXTKgA"
@@ -42,4 +46,37 @@ func TestParseDMMFilenameSeriesEpisode(t *testing.T) {
 	if candidate.MediaType != "series" || candidate.Title != "example show" || candidate.Year != 2022 || candidate.Season != 2 || candidate.Episode != 7 {
 		t.Fatalf("unexpected candidate: %+v", candidate)
 	}
+}
+
+func TestBestDMMCandidatesByGroupTrustsHashlistsWhenAvailabilityDisabled(t *testing.T) {
+	grouped := map[string][]dmmCandidate{
+		"movie:example:2024:0:0": {
+			{
+				MediaType: "movie",
+				Title:     "Example",
+				Year:      2024,
+				Torrent:   DMMHashlistTorrent{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Bytes: 1},
+				Stream:    testDMMStream(10),
+			},
+			{
+				MediaType: "movie",
+				Title:     "Example",
+				Year:      2024,
+				Torrent:   DMMHashlistTorrent{Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Bytes: 2},
+				Stream:    testDMMStream(50),
+			},
+		},
+	}
+
+	best := bestDMMCandidatesByGroup(grouped, nil)
+	if len(best) != 1 {
+		t.Fatalf("expected one trusted candidate, got %d", len(best))
+	}
+	if best[0].Torrent.Hash != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("expected highest score candidate, got %s", best[0].Torrent.Hash)
+	}
+}
+
+func testDMMStream(score int) models.TorrentStream {
+	return models.TorrentStream{QualityScore: score}
 }

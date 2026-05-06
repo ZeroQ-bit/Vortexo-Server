@@ -547,9 +547,18 @@ func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candid
 
 	availability, err := NewRealDebridClient(rdAPIKey).CheckInstantAvailability(ctx, hashes)
 	if err != nil {
+		if errors.Is(err, ErrRealDebridDisabledEndpoint) {
+			log.Printf("[DMM Hashlists] Real-Debrid instantAvailability endpoint is disabled; trusting DMM hashlist cache markers and deferring final verification to playback")
+			GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, len(candidates), "Real-Debrid availability endpoint disabled; using DMM cache markers")
+			return bestDMMCandidatesByGroup(grouped, nil), nil
+		}
 		return nil, err
 	}
 
+	return bestDMMCandidatesByGroup(grouped, availability), nil
+}
+
+func bestDMMCandidatesByGroup(grouped map[string][]dmmCandidate, availability map[string]bool) []dmmCandidate {
 	best := make([]dmmCandidate, 0, len(grouped))
 	for _, group := range grouped {
 		sort.Slice(group, func(a, b int) bool {
@@ -559,7 +568,7 @@ func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candid
 			return group[a].Stream.QualityScore > group[b].Stream.QualityScore
 		})
 		for _, candidate := range group {
-			if availability[candidate.Torrent.Hash] {
+			if availability == nil || availability[candidate.Torrent.Hash] {
 				best = append(best, candidate)
 				break
 			}
@@ -573,7 +582,7 @@ func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candid
 		return best[a].MediaType < best[b].MediaType
 	})
 
-	return best, nil
+	return best
 }
 
 func (candidate dmmCandidate) matchKey() string {

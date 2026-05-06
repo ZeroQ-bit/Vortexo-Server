@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,9 +17,32 @@ const (
 	rdBaseURL = "https://api.real-debrid.com/rest/1.0"
 )
 
+var ErrRealDebridDisabledEndpoint = errors.New("real-debrid endpoint disabled")
+
 type RealDebridClient struct {
 	apiKey     string
 	httpClient *http.Client
+}
+
+type RealDebridAPIError struct {
+	StatusCode int
+	ErrorName  string
+	ErrorCode  int
+	Body       string
+}
+
+func (e *RealDebridAPIError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.ErrorName != "" || e.ErrorCode != 0 {
+		return fmt.Sprintf("Real-Debrid API returned status %d: {error=%s error_code=%d}", e.StatusCode, e.ErrorName, e.ErrorCode)
+	}
+	return fmt.Sprintf("Real-Debrid API returned status %d: %s", e.StatusCode, e.Body)
+}
+
+func (e *RealDebridAPIError) Is(target error) bool {
+	return target == ErrRealDebridDisabledEndpoint && (e.ErrorCode == 37 || e.ErrorName == "disabled_endpoint")
 }
 
 type rdTorrentInfo struct {
@@ -403,7 +427,19 @@ func (c *RealDebridClient) makeRequest(ctx context.Context, method, endpoint str
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("Real-Debrid API returned status %d: %s", resp.StatusCode, string(data))
+			apiErr := RealDebridAPIError{
+				StatusCode: resp.StatusCode,
+				Body:       strings.TrimSpace(string(data)),
+			}
+			var payload struct {
+				Error     string `json:"error"`
+				ErrorCode int    `json:"error_code"`
+			}
+			if err := json.Unmarshal(data, &payload); err == nil {
+				apiErr.ErrorName = payload.Error
+				apiErr.ErrorCode = payload.ErrorCode
+			}
+			return nil, &apiErr
 		}
 
 		return data, nil

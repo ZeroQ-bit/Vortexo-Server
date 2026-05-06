@@ -2638,7 +2638,9 @@ export default function Settings() {
                 <div className="rounded-lg border border-green-700/50 bg-green-900/20 p-4 text-sm text-green-100">
                   Full library import is active. The DMM Hashlist Import service
                   processes the public hashlist repo in batches and stores
-                  matched cached hashes in StreamArr's stream cache.
+                  matched cached hashes in StreamArr's stream cache. If
+                  Real-Debrid disables bulk cache checks, playback still verifies
+                  each DMM hash through Real-Debrid before serving a stream.
                 </div>
               )}
             </div>
