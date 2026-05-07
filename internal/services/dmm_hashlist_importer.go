@@ -913,9 +913,9 @@ func (i *DMMHashlistImporter) cacheMovieCandidateStream(ctx context.Context, mov
 			cached_at, last_checked, check_count, is_available, upgrade_available,
 			next_check_at, created_at, updated_at
 		) VALUES (
-			'movie', $1, $1, $2, $3,
-			$4, $5, $6, $7,
-			$8, $9, $10, $11,
+			'movie', $1, $2, $3, $4,
+			$5, $6, $7, $8,
+			$9, $10, $11, $12,
 			NOW(), NOW(), 0, true, false,
 			NOW() + INTERVAL '7 days', NOW(), NOW()
 		)
@@ -954,6 +954,7 @@ func (i *DMMHashlistImporter) cacheMovieCandidateStream(ctx context.Context, mov
 		WHERE media_streams.quality_score IS NULL OR EXCLUDED.quality_score >= media_streams.quality_score
 	`
 	result, err := i.streamCacheStore.GetDB().ExecContext(ctx, query,
+		int(movieID),
 		movieID,
 		streamURL,
 		candidate.Torrent.Hash,
@@ -989,9 +990,9 @@ func (i *DMMHashlistImporter) cacheSeriesCandidateStream(ctx context.Context, se
 			cached_at, last_checked, check_count, is_available, upgrade_available,
 			next_check_at, created_at, updated_at
 		) VALUES (
-			'series', $1, $1, $2, $3, $4, $5,
-			$6, $7, $8, $9,
-			$10, $11, $12, $13,
+			'series', $1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10,
+			$11, $12, $13, $14,
 			NOW(), NOW(), 0, true, false,
 			NOW() + INTERVAL '7 days', NOW(), NOW()
 		)
@@ -1030,6 +1031,7 @@ func (i *DMMHashlistImporter) cacheSeriesCandidateStream(ctx context.Context, se
 		WHERE media_streams.quality_score IS NULL OR EXCLUDED.quality_score >= media_streams.quality_score
 	`
 	result, err := i.streamCacheStore.GetDB().ExecContext(ctx, query,
+		int(seriesID),
 		seriesID,
 		candidate.Season,
 		candidate.Episode,

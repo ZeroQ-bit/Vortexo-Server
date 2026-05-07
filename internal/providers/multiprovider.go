@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Zerr0-C00L/StreamArr/internal/services"
+	streamfilters "github.com/Zerr0-C00L/StreamArr/internal/services/streams"
 )
 
 // TorrentioStream represents a stream from Stremio addons (kept for compatibility)
@@ -47,8 +48,9 @@ type MultiProvider struct {
 	ProviderNames     []string
 	dmmDirectProvider *DMMDirectProvider // Direct DMM queries
 	// Settings getters for dynamic configuration
-	getSortOrder  func() string
-	getSortPrefer func() string
+	getSortOrder         func() string
+	getSortPrefer        func() string
+	getExcludedQualities func() string
 }
 
 const (
@@ -196,6 +198,11 @@ func (mp *MultiProvider) SetSortSettings(getSortOrder, getSortPrefer func() stri
 	mp.getSortPrefer = getSortPrefer
 }
 
+// SetQualityFilterSettings configures stream quality exclusions dynamically.
+func (mp *MultiProvider) SetQualityFilterSettings(getExcludedQualities func() string) {
+	mp.getExcludedQualities = getExcludedQualities
+}
+
 // StreamRequest represents a request for streams, following Stremio SDK pattern
 type StreamRequest struct {
 	Type        string // "movie" or "series"
@@ -308,6 +315,8 @@ func (mp *MultiProvider) GetMovieStreams(imdbID string) ([]TorrentioStream, erro
 		}
 	}
 
+	allStreams = mp.filterExcludedQualityTypes(allStreams)
+
 	log.Printf("[PROVIDER] Total streams collected: %d", len(allStreams))
 
 	if len(allStreams) == 0 && lastErr != nil {
@@ -337,6 +346,8 @@ func (mp *MultiProvider) GetSeriesStreams(imdbID string, season, episode int) ([
 		}
 	}
 
+	allStreams = mp.filterExcludedQualityTypes(allStreams)
+
 	if len(allStreams) == 0 && lastErr != nil {
 		return nil, fmt.Errorf("all providers failed, last error: %w", lastErr)
 	}
@@ -360,6 +371,19 @@ func (mp *MultiProvider) GetBestStream(imdbID string, season, episode *int, maxQ
 
 	if len(streams) == 0 {
 		return nil, fmt.Errorf("no streams found")
+	}
+
+	if maxQuality > 0 {
+		resolutionFiltered := make([]TorrentioStream, 0, len(streams))
+		for _, s := range streams {
+			if parseQualityInt(s.Quality) <= maxQuality {
+				resolutionFiltered = append(resolutionFiltered, s)
+			}
+		}
+		if len(resolutionFiltered) < len(streams) {
+			log.Printf("[QUALITY-FILTER] Max resolution %dp filtered %d -> %d streams", maxQuality, len(streams), len(resolutionFiltered))
+		}
+		streams = resolutionFiltered
 	}
 
 	// Prioritize cached streams, then accept uncached
@@ -429,6 +453,35 @@ func (mp *MultiProvider) GetBestStream(imdbID string, season, episode *int, maxQ
 	}
 
 	return nil, fmt.Errorf("no streams available")
+}
+
+func (mp *MultiProvider) filterExcludedQualityTypes(streams []TorrentioStream) []TorrentioStream {
+	if mp.getExcludedQualities == nil || len(streams) == 0 {
+		return streams
+	}
+
+	excludedQualities := strings.TrimSpace(mp.getExcludedQualities())
+	if excludedQualities == "" {
+		return streams
+	}
+
+	filtered := make([]TorrentioStream, 0, len(streams))
+	removed := 0
+	for _, stream := range streams {
+		name := strings.TrimSpace(strings.Join([]string{stream.Title, stream.Name, stream.Quality}, " "))
+		parsed := streamfilters.ParseQualityFromTorrentName(name)
+		if excluded, reason := streamfilters.QualityTypeExcluded(name, parsed.Resolution, parsed.HDRType, excludedQualities); excluded {
+			removed++
+			log.Printf("[QUALITY-FILTER] Excluding stream by %s: %s", reason, truncateString(name, 100))
+			continue
+		}
+		filtered = append(filtered, stream)
+	}
+
+	if removed > 0 {
+		log.Printf("[QUALITY-FILTER] Applied quality exclusions %q: kept %d/%d streams", excludedQualities, len(filtered), len(streams))
+	}
+	return filtered
 }
 
 // compareStreams compares two streams by a specific field

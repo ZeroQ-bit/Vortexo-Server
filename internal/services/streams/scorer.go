@@ -9,24 +9,24 @@ import (
 
 // StreamQuality contains parsed quality attributes from a torrent name
 type StreamQuality struct {
-	Resolution   string
-	HDRType      string
-	AudioFormat  string
-	Source       string
-	Codec        string
-	SizeGB       float64
-	Seeders      int
+	Resolution  string
+	HDRType     string
+	AudioFormat string
+	Source      string
+	Codec       string
+	SizeGB      float64
+	Seeders     int
 }
 
 // QualityScore represents the calculated score breakdown
 type QualityScore struct {
-	TotalScore       int
-	ResolutionScore  int
-	HDRScore         int
-	AudioScore       int
-	SourceScore      int
-	SeedersScore     int
-	SizePenalty      int
+	TotalScore      int
+	ResolutionScore int
+	HDRScore        int
+	AudioScore      int
+	SourceScore     int
+	SeedersScore    int
+	SizePenalty     int
 }
 
 // CalculateScore computes quality score using pure mathematical formula (no AI)
@@ -34,34 +34,34 @@ type QualityScore struct {
 // Max theoretical score: 40+15+15+20+~10 = ~100 points
 func CalculateScore(quality StreamQuality) QualityScore {
 	score := QualityScore{}
-	
+
 	// Resolution scoring (40 points max)
 	score.ResolutionScore = getResolutionScore(quality.Resolution)
-	
+
 	// HDR scoring (15 points max)
 	score.HDRScore = getHDRScore(quality.HDRType)
-	
+
 	// Audio scoring (15 points max)
 	score.AudioScore = getAudioScore(quality.AudioFormat)
-	
+
 	// Source scoring (20 points max)
 	score.SourceScore = getSourceScore(quality.Source)
-	
+
 	// Seeders scoring (log scale, ~10 points realistic max)
 	score.SeedersScore = getSeedersScore(quality.Seeders)
-	
+
 	// Size penalty (deduct points for bloated files)
 	score.SizePenalty = getSizePenalty(quality.SizeGB, quality.Resolution)
-	
+
 	// Total = sum of all - penalty
-	score.TotalScore = score.ResolutionScore + score.HDRScore + score.AudioScore + 
-	                   score.SourceScore + score.SeedersScore - score.SizePenalty
-	
+	score.TotalScore = score.ResolutionScore + score.HDRScore + score.AudioScore +
+		score.SourceScore + score.SeedersScore - score.SizePenalty
+
 	// Floor at 0 (no negative scores)
 	if score.TotalScore < 0 {
 		score.TotalScore = 0
 	}
-	
+
 	return score
 }
 
@@ -70,22 +70,22 @@ func CalculateScore(quality StreamQuality) QualityScore {
 func ParseQualityFromTorrentName(torrentName string) StreamQuality {
 	quality := StreamQuality{}
 	upperName := strings.ToUpper(torrentName)
-	
+
 	// Parse resolution
 	quality.Resolution = parseResolution(upperName)
-	
+
 	// Parse HDR type
 	quality.HDRType = parseHDRType(upperName)
-	
+
 	// Parse audio format
 	quality.AudioFormat = parseAudioFormat(upperName)
-	
+
 	// Parse source
 	quality.Source = parseSource(upperName)
-	
+
 	// Parse codec
 	quality.Codec = parseCodec(upperName)
-	
+
 	return quality
 }
 
@@ -180,7 +180,7 @@ func getSizePenalty(sizeGB float64, resolution string) int {
 	if sizeGB == 0 {
 		return 0 // Size unknown, no penalty
 	}
-	
+
 	switch resolution {
 	case "2160p", "4K", "UHD":
 		if sizeGB > 100 {
@@ -201,7 +201,7 @@ func getSizePenalty(sizeGB float64, resolution string) int {
 			return 5
 		}
 	}
-	
+
 	return 0
 }
 
@@ -227,8 +227,21 @@ func parseResolution(upperName string) string {
 
 // parseHDRType extracts HDR technology from torrent name
 func parseHDRType(upperName string) string {
-	// Check for Dolby Vision first (most specific)
-	if strings.Contains(upperName, "DV") || strings.Contains(upperName, "DOLBY.VISION") || strings.Contains(upperName, "DOLBYVISION") {
+	hasDV := strings.Contains(upperName, "DOLBY.VISION") ||
+		strings.Contains(upperName, "DOLBY VISION") ||
+		strings.Contains(upperName, "DOLBYVISION") ||
+		hasQualityToken(upperName, "DOVI") ||
+		hasQualityToken(upperName, "DV")
+
+	hasHDR := strings.Contains(upperName, "HDR10+") ||
+		strings.Contains(upperName, "HDR10PLUS") ||
+		hasQualityToken(upperName, "HDR10") ||
+		hasQualityToken(upperName, "HDR")
+
+	if hasDV && hasHDR {
+		return "DV+HDR"
+	}
+	if hasDV {
 		return "DV"
 	}
 	// HDR10+ before HDR10
@@ -242,6 +255,12 @@ func parseHDRType(upperName string) string {
 		return "HDR"
 	}
 	return "SDR"
+}
+
+func hasQualityToken(upperName, token string) bool {
+	pattern := `(^|[^A-Z0-9])` + regexp.QuoteMeta(token) + `([^A-Z0-9]|$)`
+	matched, _ := regexp.MatchString(pattern, upperName)
+	return matched
 }
 
 // parseAudioFormat extracts audio format from torrent name
@@ -338,11 +357,11 @@ func ExtractSizeFromTorrentName(torrentName string) float64 {
 	// Regex to match size patterns like "50GB", "12.5GB", "1.2TB"
 	sizeRegex := regexp.MustCompile(`(\d+(?:\.\d+)?)\s?(GB|TB|MB)`)
 	matches := sizeRegex.FindStringSubmatch(strings.ToUpper(torrentName))
-	
+
 	if len(matches) >= 3 {
 		var size float64
 		size, _ = parseFloat(matches[1])
-		
+
 		unit := matches[2]
 		switch unit {
 		case "TB":
@@ -353,7 +372,7 @@ func ExtractSizeFromTorrentName(torrentName string) float64 {
 			return size / 1024
 		}
 	}
-	
+
 	return 0 // Size not found
 }
 

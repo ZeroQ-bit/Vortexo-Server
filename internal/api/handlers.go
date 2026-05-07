@@ -137,6 +137,9 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 				return "best"
 			},
 		)
+		h.streamProvider.SetQualityFilterSettings(func() string {
+			return h.settingsManager.Get().ExcludedQualities
+		})
 	}
 
 	if h.mdbSyncService != nil {

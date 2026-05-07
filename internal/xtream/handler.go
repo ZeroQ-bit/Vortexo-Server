@@ -66,9 +66,22 @@ type XtreamHandler struct {
 	episodeCache            map[string]EpisodeLookup
 	episodeMu               sync.RWMutex
 	duplicateVODPerProvider func() bool
+	enableQualityVariants   func() bool
 	// Sorting settings
 	getSortOrder  func() string
 	getSortPrefer func() string
+}
+
+const xtreamMovieQualityVariantBase int64 = 900000000000
+
+var xtreamMovieQualityVariants = []struct {
+	Suffix        string
+	Label         string
+	MaxResolution int
+}{
+	{Suffix: "2160p", Label: "4K", MaxResolution: 2160},
+	{Suffix: "1080p", Label: "1080P", MaxResolution: 1080},
+	{Suffix: "720p", Label: "720P", MaxResolution: 720},
 }
 
 func NewXtreamHandler(cfg *config.Config, db *sql.DB, tmdb *services.TMDBClient, rdClient *services.RealDebridClient, channelManager *livetv.ChannelManager, epgManager *epg.Manager, stremioAddons []providers.StremioAddon, proxies []string) *XtreamHandler {
@@ -271,6 +284,11 @@ func (h *XtreamHandler) SetHideUnavailable(getter func() bool) {
 // SetDuplicateVODPerProvider allows toggling per-provider duplication in VOD streams list
 func (h *XtreamHandler) SetDuplicateVODPerProvider(getter func() bool) {
 	h.duplicateVODPerProvider = getter
+}
+
+// SetQualityVariants allows IPTV clients to list selectable quality variants.
+func (h *XtreamHandler) SetQualityVariants(getter func() bool) {
+	h.enableQualityVariants = getter
 }
 
 // SetSortSettings configures stream sorting preferences
@@ -500,6 +518,99 @@ func intFromSettings(settings map[string]interface{}, key string) (int, bool) {
 		return parsed, err == nil
 	}
 	return 0, false
+}
+
+func (h *XtreamHandler) qualityVariantsEnabled() bool {
+	return h.enableQualityVariants != nil && h.enableQualityVariants()
+}
+
+func encodeMovieQualityStreamID(tmdbID int64, quality string) int64 {
+	for idx, variant := range xtreamMovieQualityVariants {
+		if strings.EqualFold(quality, variant.Suffix) {
+			return xtreamMovieQualityVariantBase + tmdbID*10 + int64(idx+1)
+		}
+	}
+	return tmdbID
+}
+
+func decodeMoviePlaybackID(raw string) (int64, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, "", fmt.Errorf("empty movie id")
+	}
+
+	lower := strings.ToLower(trimmed)
+	for _, variant := range xtreamMovieQualityVariants {
+		suffix := "_" + variant.Suffix
+		if strings.HasSuffix(lower, suffix) {
+			base := trimmed[:len(trimmed)-len(suffix)]
+			tmdbID, err := strconv.ParseInt(base, 10, 64)
+			if err != nil {
+				return 0, "", err
+			}
+			return tmdbID, variant.Suffix, nil
+		}
+	}
+
+	id, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if id >= xtreamMovieQualityVariantBase {
+		encoded := id - xtreamMovieQualityVariantBase
+		variantIndex := int(encoded % 10)
+		tmdbID := encoded / 10
+		if tmdbID > 0 && variantIndex >= 1 && variantIndex <= len(xtreamMovieQualityVariants) {
+			return tmdbID, xtreamMovieQualityVariants[variantIndex-1].Suffix, nil
+		}
+	}
+
+	return id, "", nil
+}
+
+func movieQualityMaxResolution(quality string, fallback int) int {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "4k":
+		return 2160
+	case "480p":
+		return 480
+	}
+	for _, variant := range xtreamMovieQualityVariants {
+		if strings.EqualFold(quality, variant.Suffix) {
+			return variant.MaxResolution
+		}
+	}
+	return fallback
+}
+
+func cloneXtreamMap(src map[string]interface{}) map[string]interface{} {
+	dst := make(map[string]interface{}, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string, tmdbID int64, title, yearStr, logo string, variants bool) int {
+	if variants {
+		count := 0
+		for _, variant := range xtreamMovieQualityVariants {
+			streamID := encodeMovieQualityStreamID(tmdbID, variant.Suffix)
+			displayTitle := fmt.Sprintf("%s%s [%s]", title, yearStr, variant.Label)
+			fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d_%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
+				tmdbID, variant.Suffix, displayTitle, logo, displayTitle)
+			fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, streamID)
+			count++
+		}
+		return count
+	}
+
+	displayTitle := title + yearStr
+	fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
+		tmdbID, displayTitle, logo, displayTitle)
+	fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, tmdbID)
+	return 1
 }
 
 func movieFromXtreamRow(id, tmdbID int64, title string, year sql.NullInt64, metadata map[string]interface{}) *models.Movie {
@@ -1095,6 +1206,21 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if h.qualityVariantsEnabled() {
+			for _, variant := range xtreamMovieQualityVariants {
+				stream := cloneXtreamMap(baseStream)
+				displayName := fmt.Sprintf("%s [%s]", title, variant.Label)
+				stream["stream_id"] = encodeMovieQualityStreamID(tmdbID, variant.Suffix)
+				stream["name"] = displayName
+				stream["title"] = displayName
+				stream["quality"] = variant.Suffix
+				stream["num"] = num
+				streams = append(streams, stream)
+				num++
+			}
+			continue
+		}
+
 		baseStream["num"] = num
 		streams = append(streams, baseStream)
 		num++
@@ -1110,7 +1236,7 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmdbID, err := strconv.ParseInt(vodID, 10, 64)
+	tmdbID, _, err := decodeMoviePlaybackID(vodID)
 	if err != nil {
 		http.Error(w, "Invalid vod_id", http.StatusBadRequest)
 		return
@@ -2002,26 +2128,7 @@ func (h *XtreamHandler) handleMoviePlayWithQuality(w http.ResponseWriter, r *htt
 
 	log.Printf("Movie play request with quality: id=%s, quality=%s", movieID, quality)
 
-	// Map quality suffix to max resolution (integer height)
-	qualityMap := map[string]int{
-		"4k":    2160,
-		"2160p": 2160,
-		"1080p": 1080,
-		"720p":  720,
-		"480p":  480,
-	}
-
-	if maxRes, ok := qualityMap[quality]; ok {
-		// Store original max resolution
-		originalMaxRes := h.cfg.MaxResolution
-		// Temporarily set max resolution for this request
-		h.cfg.MaxResolution = maxRes
-		h.playMovie(w, r, movieID)
-		// Restore original max resolution
-		h.cfg.MaxResolution = originalMaxRes
-	} else {
-		h.playMovie(w, r, movieID)
-	}
+	h.playMovieWithQuality(w, r, movieID, quality)
 }
 
 // handleSeriesPlay handles /series/{username}/{password}/{id}.{ext}
@@ -2281,16 +2388,28 @@ func (h *XtreamHandler) handleDirectPlay(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *XtreamHandler) playMovie(w http.ResponseWriter, r *http.Request, vodID string) {
+	h.playMovieWithQuality(w, r, vodID, "")
+}
+
+func (h *XtreamHandler) playMovieWithQuality(w http.ResponseWriter, r *http.Request, vodID, requestedQuality string) {
 	log.Printf("[PLAY] Movie request: TMDB ID %s from IP %s", vodID, r.RemoteAddr)
 	startTime := time.Now()
-	tmdbID, _ := strconv.ParseInt(vodID, 10, 64)
+	tmdbID, decodedQuality, err := decodeMoviePlaybackID(vodID)
+	if err != nil {
+		log.Printf("[PLAY] ❌ Invalid movie id %q: %v", vodID, err)
+		http.Error(w, "Invalid movie ID", http.StatusBadRequest)
+		return
+	}
+	if decodedQuality != "" {
+		requestedQuality = decodedQuality
+	}
 
 	// Get IMDB ID from database by TMDB ID first - try both imdb_id column and metadata
 	var imdbID sql.NullString
 	var metadataJSON []byte
 
 	query := `SELECT imdb_id, metadata FROM library_movies WHERE tmdb_id = $1`
-	err := h.db.QueryRow(query, tmdbID).Scan(&imdbID, &metadataJSON)
+	err = h.db.QueryRow(query, tmdbID).Scan(&imdbID, &metadataJSON)
 	if err != nil {
 		// Try by database ID as fallback
 		query = `SELECT imdb_id, metadata FROM library_movies WHERE id = $1`
@@ -2322,7 +2441,11 @@ func (h *XtreamHandler) playMovie(w http.ResponseWriter, r *http.Request, vodID 
 	log.Printf("[PLAY] Fetching streams for movie TMDB %d, IMDB %s...", tmdbID, imdbID.String)
 
 	// Get stream from providers
-	stream, err := h.multiProvider.GetBestStream(imdbID.String, nil, nil, h.cfg.MaxResolution)
+	maxResolution := movieQualityMaxResolution(requestedQuality, h.cfg.MaxResolution)
+	if requestedQuality != "" {
+		log.Printf("[PLAY] Requested movie quality variant %s -> max resolution %dp", requestedQuality, maxResolution)
+	}
+	stream, err := h.multiProvider.GetBestStream(imdbID.String, nil, nil, maxResolution)
 	elapsed := time.Since(startTime)
 
 	if err != nil {
@@ -2537,10 +2660,7 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
 				}
 
-				fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d\" tvg-name=\"%s%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s%s\n",
-					tmdbID, title, yearStr, logo, title, yearStr)
-				fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, tmdbID)
-				cachedCount++
+				cachedCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
 			}
 			log.Printf("[XTREAM] handleGetPlaylist: Added %d cached movie streams to playlist", cachedCount)
 		}
@@ -2648,10 +2768,7 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
 				}
 
-				fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d\" tvg-name=\"%s%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s%s\n",
-					tmdbID, title, yearStr, logo, title, yearStr)
-				fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, tmdbID)
-				totalCount++
+				totalCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
 			}
 			log.Printf("[XTREAM] handleGetPlaylist: Added %d movies from full library to playlist", totalCount)
 		}

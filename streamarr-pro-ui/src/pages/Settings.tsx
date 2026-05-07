@@ -2727,7 +2727,7 @@ export default function Settings() {
                     </div>
                     <p className="text-xs text-slate-500 mt-1 ml-6">
                       Show multiple quality options (720p, 1080p, 4K) for each
-                      stream.
+                      movie in IPTV apps.
                     </p>
                   </div>
 
@@ -2768,8 +2768,9 @@ export default function Settings() {
                   🚫 Quality Exclusions
                 </h3>
                 <p className="text-sm text-slate-400 mb-4">
-                  Exclude specific stream types from being cached. These filters
-                  apply locally after streams are fetched from providers.
+                  Exclude specific stream types from playback, IPTV selection,
+                  and stream caching. These filters apply locally after streams
+                  are fetched from providers.
                 </p>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   {[

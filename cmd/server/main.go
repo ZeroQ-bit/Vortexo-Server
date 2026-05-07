@@ -437,6 +437,9 @@ func main() {
 	if currentSettings.DMMProviderEnabled || currentSettings.DMMLibraryImportEnabled {
 		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
 	}
+	multiProvider.SetQualityFilterSettings(func() string {
+		return settingsManager.Get().ExcludedQualities
+	})
 	log.Printf("✓ Stream providers enabled: %v", multiProvider.ProviderNames)
 
 	// Phase 1: Initialize stream checker with provider integration
@@ -529,6 +532,11 @@ func main() {
 	xtreamHandler.SetDuplicateVODPerProvider(func() bool {
 		s := settingsManager.Get()
 		return s.DuplicateVODPerProvider
+	})
+
+	xtreamHandler.SetQualityVariants(func() bool {
+		s := settingsManager.Get()
+		return s.EnableQualityVariants
 	})
 
 	// Wire up stream sorting settings
