@@ -193,6 +193,11 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	// Health check
 	api.HandleFunc("/health", handler.HealthCheck).Methods("GET")
 
+	// Rivulet/private client source bridge
+	api.HandleFunc("/rivulet/capabilities", handler.RivuletCapabilities).Methods("GET")
+	api.HandleFunc("/rivulet/sources", handler.RivuletSources).Methods("POST")
+	api.HandleFunc("/rivulet/play/{token}", handler.RivuletPlay).Methods("GET", "HEAD")
+
 	// Movies
 	api.HandleFunc("/movies", handler.ListMovies).Methods("GET")
 	api.HandleFunc("/movies", handler.AddMovie).Methods("POST")
