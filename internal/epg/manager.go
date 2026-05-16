@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/livetv"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/livetv"
 )
 
 // Manager handles Electronic Program Guide data
 type Manager struct {
-	programs map[string][]livetv.EPGProgram // channel_id -> programs
-	mu       sync.RWMutex
-	sources  []EPGSource
+	programs   map[string][]livetv.EPGProgram // channel_id -> programs
+	mu         sync.RWMutex
+	sources    []EPGSource
 	lastUpdate time.Time
 }
 
@@ -153,8 +153,8 @@ func (e *Manager) GenerateXMLTV(channels []livetv.Channel) (string, error) {
 	defer e.mu.RUnlock()
 
 	tv := XMLTV{
-		GeneratorName: "StreamArr Pro",
-		GeneratorURL:  "https://github.com/streamarr/streamarr",
+		GeneratorName: "Vortexo Server",
+		GeneratorURL:  "https://github.com/ZeroQ-bit/Vortexo-Server",
 	}
 
 	// Add channels
@@ -172,11 +172,11 @@ func (e *Manager) GenerateXMLTV(channels []livetv.Channel) (string, error) {
 	for channelID, programs := range e.programs {
 		for _, prog := range programs {
 			tv.Programs = append(tv.Programs, XMLTVProgram{
-				Start:   prog.StartTime.Format("20060102150405 -0700"),
-				Stop:    prog.EndTime.Format("20060102150405 -0700"),
-				Channel: channelID,
-				Title:   []Title{{Value: prog.Title}},
-				Desc:    []Desc{{Value: prog.Description}},
+				Start:    prog.StartTime.Format("20060102150405 -0700"),
+				Stop:     prog.EndTime.Format("20060102150405 -0700"),
+				Channel:  channelID,
+				Title:    []Title{{Value: prog.Title}},
+				Desc:     []Desc{{Value: prog.Description}},
 				Category: []Category{{Value: prog.Category}},
 			})
 		}
@@ -192,11 +192,11 @@ func (e *Manager) GenerateXMLTV(channels []livetv.Channel) (string, error) {
 
 // XMLTV format structures
 type XMLTV struct {
-	XMLName       xml.Name        `xml:"tv"`
-	GeneratorName string          `xml:"generator-info-name,attr"`
-	GeneratorURL  string          `xml:"generator-info-url,attr"`
-	Channels      []XMLTVChannel  `xml:"channel"`
-	Programs      []XMLTVProgram  `xml:"programme"`
+	XMLName       xml.Name       `xml:"tv"`
+	GeneratorName string         `xml:"generator-info-name,attr"`
+	GeneratorURL  string         `xml:"generator-info-url,attr"`
+	Channels      []XMLTVChannel `xml:"channel"`
+	Programs      []XMLTVProgram `xml:"programme"`
 }
 
 type XMLTVChannel struct {
@@ -298,7 +298,7 @@ func (x *XMLTVSource) BulkLoadEPG(programs map[string][]livetv.EPGProgram) {
 		}
 
 		var reader io.Reader = resp.Body
-		
+
 		// Check if the URL ends with .gz and decompress if needed
 		if strings.HasSuffix(url, ".gz") {
 			gzReader, err := gzip.NewReader(resp.Body)
@@ -445,11 +445,11 @@ func (p *PlutoTVEPGSource) GetEPG(channelID string) ([]livetv.EPGProgram, error)
 	}
 
 	slug := channelID[8:]
-	
+
 	// Get EPG timeline
 	start := time.Now().Add(-6 * time.Hour)
 	stop := time.Now().Add(18 * time.Hour)
-	
+
 	url := fmt.Sprintf("%s/v2/channels/%s/timelines?start=%s&stop=%s",
 		p.baseURL, slug, start.Format(time.RFC3339), stop.Format(time.RFC3339))
 
@@ -460,13 +460,13 @@ func (p *PlutoTVEPGSource) GetEPG(channelID string) ([]livetv.EPGProgram, error)
 	defer resp.Body.Close()
 
 	var timeline []struct {
-		Title       string    `json:"title"`
-		Episode     struct {
+		Title   string `json:"title"`
+		Episode struct {
 			Description string `json:"description"`
 		} `json:"episode"`
-		Start       time.Time `json:"start"`
-		Stop        time.Time `json:"stop"`
-		Category    string    `json:"category"`
+		Start    time.Time `json:"start"`
+		Stop     time.Time `json:"stop"`
+		Category string    `json:"category"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&timeline); err != nil {
@@ -491,12 +491,12 @@ func (p *PlutoTVEPGSource) GetEPG(channelID string) ([]livetv.EPGProgram, error)
 // Tries multiple strategies to find EPG data for a channel
 func (e *Manager) NormalizeChannelID(channelID, channelName string) []string {
 	candidates := []string{channelID}
-	
+
 	// Add the channel name as-is
 	if channelName != "" && channelName != channelID {
 		candidates = append(candidates, channelName)
 	}
-	
+
 	// Remove country codes like (SR), (BA), (HR), @SD, @HD
 	normalized := strings.TrimSpace(channelName)
 	normalized = strings.NewReplacer(
@@ -514,19 +514,19 @@ func (e *Manager) NormalizeChannelID(channelID, channelName string) []string {
 		" SD", "",
 	).Replace(normalized)
 	normalized = strings.TrimSpace(normalized)
-	
+
 	if normalized != channelName && normalized != channelID {
 		candidates = append(candidates, normalized)
 	}
-	
+
 	// Try with common variations
 	lower := strings.ToLower(normalized)
-	candidates = append(candidates, 
+	candidates = append(candidates,
 		strings.ToUpper(normalized),
 		strings.Title(lower),
 		lower,
 	)
-	
+
 	// Remove dots and special chars
 	simplified := strings.Map(func(r rune) rune {
 		if r == '.' || r == '_' || r == '-' {
@@ -538,14 +538,14 @@ func (e *Manager) NormalizeChannelID(channelID, channelName string) []string {
 	if simplified != normalized {
 		candidates = append(candidates, simplified)
 	}
-	
+
 	return candidates
 }
 
 // GetEPGWithFallback tries to get EPG using multiple matching strategies
 func (e *Manager) GetEPGWithFallback(channelID, channelName string, date time.Time) []livetv.EPGProgram {
 	candidates := e.NormalizeChannelID(channelID, channelName)
-	
+
 	// Try each candidate
 	for _, candidate := range candidates {
 		programs := e.GetEPG(candidate, date)
@@ -553,14 +553,14 @@ func (e *Manager) GetEPGWithFallback(channelID, channelName string, date time.Ti
 			return programs
 		}
 	}
-	
+
 	return []livetv.EPGProgram{}
 }
 
 // GetCurrentProgramWithFallback tries to get current program using multiple matching strategies
 func (e *Manager) GetCurrentProgramWithFallback(channelID, channelName string) *livetv.EPGProgram {
 	candidates := e.NormalizeChannelID(channelID, channelName)
-	
+
 	// Try each candidate
 	for _, candidate := range candidates {
 		program := e.GetCurrentProgram(candidate)
@@ -568,6 +568,6 @@ func (e *Manager) GetCurrentProgramWithFallback(channelID, channelName string) *
 			return program
 		}
 	}
-	
+
 	return nil
 }

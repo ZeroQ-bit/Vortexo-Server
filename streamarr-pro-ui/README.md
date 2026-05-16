@@ -1,6 +1,6 @@
-# StreamArr Web UI
+# Vortexo Server Web UI
 
-Modern React + TypeScript web interface for StreamArr, inspired by Radarr/Sonarr.
+Modern React + TypeScript web interface for Vortexo Server, inspired by Radarr/Sonarr.
 
 ## Quick Start
 

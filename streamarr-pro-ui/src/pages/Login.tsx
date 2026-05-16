@@ -145,7 +145,7 @@ export default function Login() {
               <Play className="w-10 h-10 text-white fill-white" />
             </div>
           </div>
-          <h1 className="text-4xl font-black text-white tracking-tight">StreamArr Pro</h1>
+          <h1 className="text-4xl font-black text-white tracking-tight">Vortexo Server</h1>
           <p className="mt-2 text-slate-400">
             {setupRequired ? 'Create your admin account to get started' : 'Sign in to continue watching'}
           </p>
@@ -284,7 +284,7 @@ export default function Login() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-sm text-slate-500">
-          StreamArr Pro v1.2.1
+          Vortexo Server v1.2.1
         </div>
       </div>
     </div>

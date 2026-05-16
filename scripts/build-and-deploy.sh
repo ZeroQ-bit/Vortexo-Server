@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build and deploy StreamArr changes
+# Build and deploy Vortexo Server changes
 
-echo "=== Building StreamArr ==="
+echo "=== Building Vortexo Server ==="
 
 # Build the binary
 cd /Users/zeroq/StreamArr\ Pro

@@ -3,7 +3,7 @@ package services
 import (
 	"testing"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 )
 
 func TestDecodeDMMHashlistHTML(t *testing.T) {

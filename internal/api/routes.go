@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/auth"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/auth"
 	"github.com/gorilla/mux"
 )
 
@@ -119,7 +119,7 @@ func getUIPath() string {
 	paths := []string{
 		"./streamarr-pro-ui/dist",    // resolves to /app/streamarr-pro-ui/dist in container
 		"/app/streamarr-pro-ui/dist", // explicit container path
-		"/opt/StreamArr/streamarr-pro-ui/dist",
+		"/opt/Vortexo-Server/streamarr-pro-ui/dist",
 		"/opt/streamarr/streamarr-pro-ui/dist",
 	}
 
@@ -193,10 +193,10 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	// Health check
 	api.HandleFunc("/health", handler.HealthCheck).Methods("GET")
 
-	// Rivulet/private client source bridge
-	api.HandleFunc("/rivulet/capabilities", handler.RivuletCapabilities).Methods("GET")
-	api.HandleFunc("/rivulet/sources", handler.RivuletSources).Methods("POST")
-	api.HandleFunc("/rivulet/play/{token}", handler.RivuletPlay).Methods("GET", "HEAD")
+	// Vortexo/private client source bridge
+	api.HandleFunc("/vortexo/capabilities", handler.VortexoCapabilities).Methods("GET")
+	api.HandleFunc("/vortexo/sources", handler.VortexoSources).Methods("POST")
+	api.HandleFunc("/vortexo/play/{token}", handler.VortexoPlay).Methods("GET", "HEAD")
 
 	// Movies
 	api.HandleFunc("/movies", handler.ListMovies).Methods("GET")

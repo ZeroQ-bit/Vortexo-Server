@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/epg"
-	"github.com/Zerr0-C00L/StreamArr/internal/livetv"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
-	"github.com/Zerr0-C00L/StreamArr/internal/services/streams"
-	"github.com/Zerr0-C00L/StreamArr/internal/settings"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/epg"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/livetv"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 	"github.com/gorilla/mux"
 )
 
@@ -34,7 +34,7 @@ var (
 	BuildDate = "unknown"
 )
 
-const githubRepo = "ZeroQ-bit/StreamArr-Pro"
+const githubRepo = "ZeroQ-bit/Vortexo-Server"
 
 func selfUpdateSupported() bool {
 	return !strings.EqualFold(os.Getenv("STREAMARR_DISABLE_SELF_UPDATE"), "true")
@@ -50,7 +50,7 @@ func versionResponseBase() map[string]interface{} {
 	}
 
 	if !supported {
-		response["update_message"] = "Self-updates are disabled for this deployment. Update StreamArr Pro through your app manager instead."
+		response["update_message"] = "Self-updates are disabled for this deployment. Update Vortexo Server through your app manager instead."
 	}
 
 	return response
@@ -2314,7 +2314,7 @@ func (h *Handler) PlayEpisode(w http.ResponseWriter, r *http.Request) {
 // RootHandler handles GET /
 func (h *Handler) RootHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"name":    "StreamArr API",
+		"name":    "Vortexo Server API",
 		"version": "1.1.0",
 		"status":  "running",
 		"endpoints": map[string]string{
@@ -4552,7 +4552,7 @@ func (h *Handler) InstallUpdate(w http.ResponseWriter, r *http.Request) {
 	if !selfUpdateSupported() {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"success": false,
-			"error":   "Self-updates are disabled for this deployment. Update StreamArr Pro through your app manager instead.",
+			"error":   "Self-updates are disabled for this deployment. Update Vortexo Server through your app manager instead.",
 		})
 		return
 	}

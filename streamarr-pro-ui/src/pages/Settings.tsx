@@ -1410,7 +1410,7 @@ export default function Settings() {
           <div>
             <h1 className="text-4xl font-black text-white">Settings</h1>
             <p className="text-slate-400 mt-1">
-              Manage your StreamArr configuration
+              Manage your Vortexo Server configuration
             </p>
           </div>
           <button
@@ -1896,7 +1896,7 @@ export default function Settings() {
                         Auto-add best library streams to Real-Debrid
                       </div>
                       <div className="text-xs text-slate-400 mt-1">
-                        When enabled, StreamArr will scan your library, pick the
+                        When enabled, Vortexo Server will scan your library, pick the
                         best discovered stream for each item, and add it to your
                         Real-Debrid account in the background. This can take a
                         while on large libraries.
@@ -2063,7 +2063,7 @@ export default function Settings() {
                     Stremio Addon (Built-in)
                   </h3>
                   <p className="text-sm text-slate-300">
-                    Enable the built-in Stremio addon to open your StreamArr
+                    Enable the built-in Stremio addon to open your Vortexo Server
                     library directly inside Stremio. Configure which catalogs to
                     show and customize their names.
                   </p>
@@ -2128,7 +2128,7 @@ export default function Settings() {
                       <input
                         type="text"
                         value={
-                          settings.stremio_addon?.addon_name || "StreamArr Pro"
+                          settings.stremio_addon?.addon_name || "Vortexo Server"
                         }
                         onChange={(e) =>
                           updateSetting("stremio_addon", {
@@ -2136,7 +2136,7 @@ export default function Settings() {
                             addon_name: e.target.value,
                           })
                         }
-                        placeholder="StreamArr Pro"
+                        placeholder="Vortexo Server"
                         className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white"
                       />
                       <p className="text-xs text-slate-500 mt-1">
@@ -2158,7 +2158,7 @@ export default function Settings() {
                             public_server_url: e.target.value,
                           })
                         }
-                        placeholder="e.g., streamarr.mydomain.com:8080 or 123.45.67.89:8080"
+                        placeholder="e.g., vortexo.example.com:8080 or 123.45.67.89:8080"
                         className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white font-mono text-sm"
                       />
                       <p className="text-xs text-slate-500 mt-1">
@@ -2349,7 +2349,7 @@ export default function Settings() {
                       🎬 Provider Addons
                     </h3>
                     <p className="text-sm text-slate-400">
-                      These addons are what StreamArr uses to find streams. You
+                      These addons are what Vortexo Server uses to find streams. You
                       can add any standard Stremio-compatible provider addon
                       here.
                     </p>
@@ -2415,7 +2415,7 @@ export default function Settings() {
                     </li>
                     <li>
                       If you leave this list empty but configure Real-Debrid,
-                      StreamArr will auto-bootstrap default providers for you
+                      Vortexo Server will auto-bootstrap default providers for you
                     </li>
                   </ul>
                   <div className="mt-3 text-xs text-slate-500">
@@ -2571,7 +2571,7 @@ export default function Settings() {
                       DMM Provider Only
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
-                      Query DMM for cached torrents when StreamArr looks for
+                      Query DMM for cached torrents when Vortexo Server looks for
                       streams. This does not add new movies or series by itself.
                     </div>
                   </div>
@@ -2638,7 +2638,7 @@ export default function Settings() {
                 <div className="rounded-lg border border-green-700/50 bg-green-900/20 p-4 text-sm text-green-100">
                   Full library import is active. The DMM Hashlist Import service
                   processes the public hashlist repo in batches and stores
-                  matched cached hashes in StreamArr's stream cache. If
+                  matched cached hashes in Vortexo Server's stream cache. If
                   Real-Debrid disables bulk cache checks, playback still verifies
                   each DMM hash through Real-Debrid before serving a stream.
                 </div>
@@ -4389,7 +4389,7 @@ export default function Settings() {
                     📡 Xtream Codes API
                   </h3>
                   <p className="text-sm text-slate-300">
-                    StreamArr exposes an Xtream Codes compatible API that can be
+                    Vortexo Server exposes an Xtream Codes compatible API that can be
                     used with IPTV players like TiviMate, XCIPTV, or OTT
                     Navigator.
                   </p>
@@ -5070,7 +5070,7 @@ export default function Settings() {
             <div className="bg-[#1e1e1e] rounded-xl p-6 border border-white/10">
               <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-4 mb-6">
                 <h3 className="text-red-400 font-medium mb-2">
-                  ℹ️ About StreamArr Pro
+                  ℹ️ About Vortexo Server
                 </h3>
                 <p className="text-sm text-blue-200">
                   Self-hosted media server for Live TV, Movies & Series with
@@ -5433,7 +5433,7 @@ export default function Settings() {
                         "Updates are managed by your deployment platform for this installation."}
                     </div>
                     <a
-                      href="https://github.com/ZeroQ-bit/StreamArr-Pro/releases"
+                      href="https://github.com/ZeroQ-bit/Vortexo-Server/releases"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-2 px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
@@ -5478,7 +5478,7 @@ export default function Settings() {
                           )}
                         </button>
                         <a
-                          href="https://github.com/ZeroQ-bit/StreamArr-Pro/releases"
+                          href="https://github.com/ZeroQ-bit/Vortexo-Server/releases"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
@@ -5569,7 +5569,7 @@ export default function Settings() {
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   <a
-                    href="https://github.com/ZeroQ-bit/StreamArr-Pro"
+                    href="https://github.com/ZeroQ-bit/Vortexo-Server"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 px-4 py-3 bg-[#2a2a2a] text-slate-300 rounded-lg hover:bg-gray-700 hover:text-white"
@@ -5577,7 +5577,7 @@ export default function Settings() {
                     <Github className="h-5 w-5" /> GitHub Repository
                   </a>
                   <a
-                    href="https://github.com/ZeroQ-bit/StreamArr-Pro/issues"
+                    href="https://github.com/ZeroQ-bit/Vortexo-Server/issues"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 px-4 py-3 bg-[#2a2a2a] text-slate-300 rounded-lg hover:bg-gray-700 hover:text-white"
@@ -5585,7 +5585,7 @@ export default function Settings() {
                     <AlertCircle className="h-5 w-5" /> Report Issue
                   </a>
                   <a
-                    href="https://github.com/ZeroQ-bit/StreamArr-Pro/discussions"
+                    href="https://github.com/ZeroQ-bit/Vortexo-Server/discussions"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-2 px-4 py-3 bg-[#2a2a2a] text-slate-300 rounded-lg hover:bg-gray-700 hover:text-white"
@@ -5633,7 +5633,7 @@ export default function Settings() {
                   <div>• Live TV channels from various free sources</div>
                 </div>
                 <div className="text-xs text-slate-500 mt-4 pt-4 border-t border-white/10">
-                  StreamArr is open source software licensed under MIT. Use
+                  Vortexo Server is open source software licensed under MIT. Use
                   responsibly.
                 </div>
               </div>

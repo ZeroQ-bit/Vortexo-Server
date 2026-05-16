@@ -54,7 +54,7 @@ jobs:
           npm ci
           npm run build
           cd ..
-          tar -czf streamarr-pro-ui-dist.tar.gz -C streamarr-pro-ui/dist .
+          tar -czf vortexo-server-ui-dist.tar.gz -C streamarr-pro-ui/dist .
 
       - name: Create release archive
         run: |
@@ -67,7 +67,7 @@ jobs:
           cp docker-compose.yml release/
           cp Dockerfile release/
           cp README.md release/
-          tar -czf streamarr-pro-linux-amd64.tar.gz -C release .
+          tar -czf vortexo-server-linux-amd64.tar.gz -C release .
           
           # ARM64 archive
           mkdir -p release-arm64
@@ -79,7 +79,7 @@ jobs:
           cp docker-compose.yml release-arm64/
           cp Dockerfile release-arm64/
           cp README.md release-arm64/
-          tar -czf streamarr-pro-linux-arm64.tar.gz -C release-arm64 .
+          tar -czf vortexo-server-linux-arm64.tar.gz -C release-arm64 .
 
       - name: Generate changelog
         id: changelog
@@ -102,12 +102,12 @@ jobs:
           
           ### Docker (Recommended)
           \`\`\`bash
-          docker pull ghcr.io/zeroq-bit/streamarr-pro:${{ inputs.version }}
+          docker pull ghcr.io/zeroq-bit/vortexo-server:${{ inputs.version }}
           \`\`\`
           
           ### Manual Installation
           1. Download the appropriate archive for your system
-          2. Extract the archive: \`tar -xzf streamarr-pro-linux-amd64.tar.gz\`
+          2. Extract the archive: \`tar -xzf vortexo-server-linux-amd64.tar.gz\`
           3. Run migrations: \`./migrate up\`
           4. Start the server: \`./server\`
           5. Start the worker: \`./worker\`
@@ -134,14 +134,14 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ inputs.version }}
-          name: StreamArr Pro ${{ inputs.version }}
+          name: Vortexo Server ${{ inputs.version }}
           body_path: CHANGELOG.txt
           draft: false
           prerelease: ${{ inputs.prerelease }}
           files: |
-            streamarr-pro-linux-amd64.tar.gz
-            streamarr-pro-linux-arm64.tar.gz
-            streamarr-pro-ui-dist.tar.gz
+            vortexo-server-linux-amd64.tar.gz
+            vortexo-server-linux-arm64.tar.gz
+            vortexo-server-ui-dist.tar.gz
             bin/server-linux-amd64
             bin/worker-linux-amd64
             bin/migrate-linux-amd64

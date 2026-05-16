@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/scrapers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/scrapers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 )
 
 // VidSrcAdapter adapts VidSrc scraper to StreamProvider interface
@@ -87,7 +87,7 @@ func (v *VidSrcAdapter) GetSeriesStreams(imdbID string, season, episode int) ([]
 // extractQuality attempts to extract quality from server name
 func extractQuality(serverName string) string {
 	lower := strings.ToLower(serverName)
-	
+
 	if strings.Contains(lower, "4k") || strings.Contains(lower, "2160") {
 		return "2160p"
 	} else if strings.Contains(lower, "1080") {
@@ -97,7 +97,7 @@ func extractQuality(serverName string) string {
 	} else if strings.Contains(lower, "480") {
 		return "480p"
 	}
-	
+
 	// Default to 1080p for direct streaming sources
 	return "1080p"
 }

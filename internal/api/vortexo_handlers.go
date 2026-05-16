@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
-	streammeta "github.com/Zerr0-C00L/StreamArr/internal/services/streams"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	streammeta "github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 	"github.com/gorilla/mux"
 )
 
-type rivuletSourcesRequest struct {
+type vortexoSourcesRequest struct {
 	Type          string `json:"type"`
 	Title         string `json:"title"`
 	Year          int    `json:"year,omitempty"`
@@ -27,7 +27,7 @@ type rivuletSourcesRequest struct {
 	PlexRatingKey string `json:"plex_rating_key,omitempty"`
 }
 
-type rivuletSource struct {
+type vortexoSource struct {
 	ID           string  `json:"id"`
 	Label        string  `json:"label"`
 	Title        string  `json:"title,omitempty"`
@@ -44,52 +44,52 @@ type rivuletSource struct {
 	PlayURL      string  `json:"play_url"`
 }
 
-type rivuletPlayToken struct {
+type vortexoPlayToken struct {
 	Hash  string `json:"hash,omitempty"`
 	URL   string `json:"url,omitempty"`
 	Title string `json:"title,omitempty"`
 }
 
-// RivuletCapabilities exposes a tiny discovery endpoint for private clients.
-func (h *Handler) RivuletCapabilities(w http.ResponseWriter, r *http.Request) {
+// VortexoCapabilities exposes a tiny discovery endpoint for private clients.
+func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"name":       "StreamArr Sources",
+		"name":       "Vortexo Server Sources",
 		"source_api": true,
 		"playback":   true,
 		"types":      []string{"movie", "episode"},
 	})
 }
 
-// RivuletSources returns StreamArr-resolved source options for private clients.
-func (h *Handler) RivuletSources(w http.ResponseWriter, r *http.Request) {
+// VortexoSources returns server-resolved source options for private clients.
+func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 	if h.streamProvider == nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"matched":   false,
 			"available": false,
-			"sources":   []rivuletSource{},
+			"sources":   []vortexoSource{},
 		})
 		return
 	}
 
-	var req rivuletSourcesRequest
+	var req vortexoSourcesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	req.Type = normalizeRivuletType(req.Type)
+	req.Type = normalizeVortexoType(req.Type)
 	if req.Type == "" {
 		respondError(w, http.StatusBadRequest, "type must be movie or episode")
 		return
 	}
 
-	imdbID, releaseYear, err := h.resolveRivuletIMDBID(r.Context(), req)
+	imdbID, releaseYear, err := h.resolveVortexoIMDBID(r.Context(), req)
 	if err != nil {
-		log.Printf("[Rivulet] Could not resolve %s %q tmdb=%d: %v", req.Type, req.Title, req.TMDBID, err)
+		log.Printf("[Vortexo] Could not resolve %s %q tmdb=%d: %v", req.Type, req.Title, req.TMDBID, err)
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"matched":   false,
 			"available": false,
-			"sources":   []rivuletSource{},
+			"sources":   []vortexoSource{},
 		})
 		return
 	}
@@ -104,16 +104,16 @@ func (h *Handler) RivuletSources(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		log.Printf("[Rivulet] Stream lookup failed for %s %s: %v", req.Type, imdbID, err)
+		log.Printf("[Vortexo] Stream lookup failed for %s %s: %v", req.Type, imdbID, err)
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"matched":   true,
 			"available": false,
-			"sources":   []rivuletSource{},
+			"sources":   []vortexoSource{},
 		})
 		return
 	}
 
-	sources := h.buildRivuletSources(providerStreams)
+	sources := h.buildVortexoSources(providerStreams)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"matched":   true,
 		"available": len(sources) > 0,
@@ -121,8 +121,8 @@ func (h *Handler) RivuletSources(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RivuletPlay resolves a private source token and redirects to a playable URL.
-func (h *Handler) RivuletPlay(w http.ResponseWriter, r *http.Request) {
+// VortexoPlay resolves a private source token and redirects to a playable URL.
+func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	tokenValue := strings.TrimSpace(vars["token"])
 	if tokenValue == "" {
@@ -130,7 +130,7 @@ func (h *Handler) RivuletPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := decodeRivuletPlayToken(tokenValue)
+	token, err := decodeVortexoPlayToken(tokenValue)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid source token")
 		return
@@ -151,7 +151,7 @@ func (h *Handler) RivuletPlay(w http.ResponseWriter, r *http.Request) {
 
 	streamURL, err := h.rdClient.GetStreamURL(ctx, token.Hash)
 	if err != nil {
-		log.Printf("[Rivulet] Failed to resolve source %q: %v", token.Title, err)
+		log.Printf("[Vortexo] Failed to resolve source %q: %v", token.Title, err)
 		respondError(w, http.StatusBadGateway, "failed to resolve source")
 		return
 	}
@@ -159,7 +159,7 @@ func (h *Handler) RivuletPlay(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, streamURL, http.StatusFound)
 }
 
-func (h *Handler) resolveRivuletIMDBID(ctx context.Context, req rivuletSourcesRequest) (string, int, error) {
+func (h *Handler) resolveVortexoIMDBID(ctx context.Context, req vortexoSourcesRequest) (string, int, error) {
 	if strings.HasPrefix(req.IMDBID, "tt") {
 		return req.IMDBID, req.Year, nil
 	}
@@ -218,15 +218,15 @@ func (h *Handler) resolveRivuletIMDBID(ctx context.Context, req rivuletSourcesRe
 	return "", 0, fmt.Errorf("movie imdb id not found")
 }
 
-func (h *Handler) buildRivuletSources(providerStreams []providers.TorrentioStream) []rivuletSource {
-	sources := make([]rivuletSource, 0, len(providerStreams))
+func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream) []vortexoSource {
+	sources := make([]vortexoSource, 0, len(providerStreams))
 	for _, stream := range providerStreams {
 		hash := stream.InfoHash
 		if !isValidHash(hash) && stream.URL != "" {
 			hash = extractHashFromURL(stream.URL)
 		}
 
-		token := rivuletPlayToken{
+		token := vortexoPlayToken{
 			Hash:  hash,
 			Title: stream.Title,
 		}
@@ -238,7 +238,7 @@ func (h *Handler) buildRivuletSources(providerStreams []providers.TorrentioStrea
 			continue
 		}
 
-		id, err := encodeRivuletPlayToken(token)
+		id, err := encodeVortexoPlayToken(token)
 		if err != nil {
 			continue
 		}
@@ -246,13 +246,13 @@ func (h *Handler) buildRivuletSources(providerStreams []providers.TorrentioStrea
 		parsed := streammeta.ParseQualityFromTorrentName(firstNonEmpty(stream.Title, stream.Name))
 		quality := firstNonEmpty(parsed.Resolution, stream.Quality)
 		dynamicRange := parsed.HDRType
-		label := rivuletSourceLabel(quality, dynamicRange, parsed.Codec, parsed.AudioFormat, stream.Source)
+		label := vortexoSourceLabel(quality, dynamicRange, parsed.Codec, parsed.AudioFormat, stream.Source)
 		sizeGB := float64(stream.Size) / (1024 * 1024 * 1024)
 		if sizeGB < 0 {
 			sizeGB = 0
 		}
 
-		sources = append(sources, rivuletSource{
+		sources = append(sources, vortexoSource{
 			ID:           id,
 			Label:        label,
 			Title:        stream.Name,
@@ -266,14 +266,14 @@ func (h *Handler) buildRivuletSources(providerStreams []providers.TorrentioStrea
 			Seeders:      stream.Seeders,
 			SizeGB:       sizeGB,
 			FileName:     stream.Title,
-			PlayURL:      "/api/v1/rivulet/play/" + id,
+			PlayURL:      "/api/v1/vortexo/play/" + id,
 		})
 	}
 
 	return sources
 }
 
-func normalizeRivuletType(value string) string {
+func normalizeVortexoType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "movie":
 		return "movie"
@@ -284,7 +284,7 @@ func normalizeRivuletType(value string) string {
 	}
 }
 
-func encodeRivuletPlayToken(token rivuletPlayToken) (string, error) {
+func encodeVortexoPlayToken(token vortexoPlayToken) (string, error) {
 	data, err := json.Marshal(token)
 	if err != nil {
 		return "", err
@@ -292,8 +292,8 @@ func encodeRivuletPlayToken(token rivuletPlayToken) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-func decodeRivuletPlayToken(value string) (rivuletPlayToken, error) {
-	var token rivuletPlayToken
+func decodeVortexoPlayToken(value string) (vortexoPlayToken, error) {
+	var token vortexoPlayToken
 	data, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil {
 		return token, err
@@ -307,7 +307,7 @@ func decodeRivuletPlayToken(value string) (rivuletPlayToken, error) {
 	return token, nil
 }
 
-func rivuletSourceLabel(parts ...string) string {
+func vortexoSourceLabel(parts ...string) string {
 	cleaned := make([]string, 0, len(parts))
 	seen := make(map[string]bool)
 	for _, part := range parts {

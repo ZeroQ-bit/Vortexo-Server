@@ -60,7 +60,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Auth is required but not provided or incorrect
-		w.Header().Set("WWW-Authenticate", `Basic realm="StreamArr Pro"`)
+		w.Header().Set("WWW-Authenticate", `Basic realm="Vortexo Server"`)
 		if authProvided {
 			log.Printf("🚫 Authentication failed for %s %s", r.Method, r.URL.Path)
 		}

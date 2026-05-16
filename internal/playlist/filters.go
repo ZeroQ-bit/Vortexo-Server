@@ -1,8 +1,8 @@
 package playlist
 
 import (
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 )
 
 func playlistContentFilters(cfg *config.Config) services.ContentFilterOptions {

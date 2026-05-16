@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
-	streamfilters "github.com/Zerr0-C00L/StreamArr/internal/services/streams"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
+	streamfilters "github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 )
 
 // TorrentioStream represents a stream from Stremio addons (kept for compatibility)

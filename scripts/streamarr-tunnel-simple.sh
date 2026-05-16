@@ -1,5 +1,5 @@
 #!/bin/sh
-# StreamArr Pro SSH Tunnel - Simple approach
+# Vortexo Server SSH Tunnel - Simple approach
 # Creates SOCKS proxy on server that exits via router's home IP
 
 LOG_FILE="/tmp/streamarr-tunnel.log"

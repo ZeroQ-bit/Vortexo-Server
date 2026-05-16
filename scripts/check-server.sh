@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# StreamArr Pro - Check Server Status and Monitor Playback
+# Vortexo Server - Check Server Status and Monitor Playback
 # Quick diagnostic tool for the cloud server
 
 SERVER="root@77.42.16.119"
 REMOTE_PATH="/root/streamarr-pro"
 
-echo "🔍 StreamArr Pro - Server Status Check"
+echo "🔍 Vortexo Server - Server Status Check"
 echo "========================================"
 echo ""
 
@@ -19,13 +19,13 @@ ssh "$SERVER" << 'ENDSSH'
     echo "1️⃣  Process Status:"
     echo "-------------------"
     if pgrep -f "bin/server" > /dev/null; then
-        echo "✅ StreamArr server is running"
+        echo "✅ Vortexo Server is running"
         ps aux | grep "bin/server" | grep -v grep
     elif docker ps | grep -q streamarr; then
-        echo "✅ StreamArr Docker container is running"
+        echo "✅ Vortexo Server Docker container is running"
         docker ps | grep streamarr
     else
-        echo "❌ StreamArr server is NOT running"
+        echo "❌ Vortexo Server is NOT running"
     fi
     echo ""
     

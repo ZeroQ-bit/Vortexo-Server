@@ -46,7 +46,7 @@ jobs:
       - name: Compute image metadata
         id: vars
         run: |
-          IMAGE_NAME="$(echo "ghcr.io/${GITHUB_REPOSITORY_OWNER}/streamarr-pro" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_NAME="$(echo "ghcr.io/${GITHUB_REPOSITORY_OWNER}/vortexo-server" | tr '[:upper:]' '[:lower:]')"
           SHORT_SHA="${GITHUB_SHA::7}"
           VERSION="main"
           BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -86,7 +86,7 @@ jobs:
           cache-to: type=gha,mode=max
           tags: ${{ steps.vars.outputs.tags }}
           labels: |
-            org.opencontainers.image.title=StreamArr Pro
+            org.opencontainers.image.title=Vortexo Server
             org.opencontainers.image.description=Self-hosted media server with Netflix-style UI
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

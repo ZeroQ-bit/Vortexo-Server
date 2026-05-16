@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 )
 
 // MDBListSyncService handles syncing MDBList lists to the database

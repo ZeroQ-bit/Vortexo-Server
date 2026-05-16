@@ -9,10 +9,10 @@ HEALTH_CHECK_SCRIPT="$SCRIPT_DIR/health-check.sh"
 # Make health check script executable
 chmod +x "$HEALTH_CHECK_SCRIPT"
 
-echo "StreamArr Monitoring Setup"
+echo "Vortexo Server Monitoring Setup"
 echo "=========================="
 echo ""
-echo "This script will set up automatic health monitoring for StreamArr."
+echo "This script will set up automatic health monitoring for Vortexo Server."
 echo ""
 echo "Available options:"
 echo "1. Every 5 minutes (recommended)"
@@ -47,7 +47,7 @@ case $choice in
         INTERVAL="every hour"
         ;;
     6)
-        echo "Removing StreamArr health check from crontab..."
+        echo "Removing Vortexo Server health check from crontab..."
         crontab -l 2>/dev/null | grep -v "health-check.sh" | crontab -
         echo "✅ Health check monitoring removed"
         exit 0
@@ -68,7 +68,7 @@ esac
 # Create the cron job
 CRON_JOB="$CRON_SCHEDULE $HEALTH_CHECK_SCRIPT >> $SCRIPT_DIR/../logs/health-check.log 2>&1"
 
-# Remove any existing StreamArr health check entries
+# Remove any existing Vortexo Server health check entries
 crontab -l 2>/dev/null | grep -v "health-check.sh" | crontab -
 
 # Add the new cron job

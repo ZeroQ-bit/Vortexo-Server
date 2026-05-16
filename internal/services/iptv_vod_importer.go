@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	isettings "github.com/Zerr0-C00L/StreamArr/internal/settings"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 // IPTVVODImportSummary reports results of an import run

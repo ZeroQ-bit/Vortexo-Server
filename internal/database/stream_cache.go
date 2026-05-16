@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"github.com/lib/pq"
 )
 

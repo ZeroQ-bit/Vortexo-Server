@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# StreamArr Pro Quick Start Script
-# Quickly sets up and starts the StreamArr Pro system
+# Vortexo Server Quick Start Script
+# Quickly sets up and starts the Vortexo Server system
 
 set -e
 
 echo "╔════════════════════════════════════════╗"
-echo "║       StreamArr Pro Quick Start        ║"
+echo "║       Vortexo Server Quick Start        ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 
@@ -60,7 +60,7 @@ echo ""
 
 echo ""
 echo "╔════════════════════════════════════════╗"
-echo "║      Starting StreamArr Pro Services   ║"
+echo "║      Starting Vortexo Server Services   ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 
@@ -97,7 +97,7 @@ echo $WORKER_PID > logs/worker.pid
 
 echo ""
 echo "╔════════════════════════════════════════╗"
-echo "║        StreamArr Pro is Ready!         ║"
+echo "║        Vortexo Server is Ready!         ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 echo "📍 API Endpoints:"

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# StreamArr Health Check and Auto-Restart Script
-# This script checks if the StreamArr containers are running and healthy
+# Vortexo Server Health Check and Auto-Restart Script
+# This script checks if the Vortexo Server containers are running and healthy
 # If not, it automatically restarts them
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +46,7 @@ check_containers_running() {
     local db_running=$(docker ps --filter "name=streamarr-db" --filter "status=running" --format "{{.Names}}" | grep -w "streamarr-db" | wc -l)
     
     if [ "$streamarr_running" -eq 0 ]; then
-        log_message "❌ StreamArr container is not running"
+        log_message "❌ Vortexo Server container is not running"
         return 1
     fi
     
@@ -64,7 +64,7 @@ check_container_health() {
     local db_health=$(docker inspect --format='{{.State.Health.Status}}' streamarr-db 2>/dev/null)
     
     if [ "$streamarr_health" != "healthy" ]; then
-        log_message "❌ StreamArr container is not healthy (Status: $streamarr_health)"
+        log_message "❌ Vortexo Server container is not healthy (Status: $streamarr_health)"
         return 1
     fi
     

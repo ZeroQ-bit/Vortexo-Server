@@ -1,5 +1,5 @@
 #!/bin/sh
-# StreamArr Pro Reverse SSH Tunnel
+# Vortexo Server Reverse SSH Tunnel
 # Forwards server's localhost:9050 -> router's localhost:1080 (3proxy SOCKS)
 
 LOG_FILE="/tmp/streamarr-tunnel.log"

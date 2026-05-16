@@ -12,7 +12,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
 )
 
 func main() {
@@ -21,7 +21,7 @@ func main() {
 		log.Println("Warning: .env file not found, using environment variables")
 	}
 
-	log.Println("StreamArr Database Migration Tool")
+	log.Println("Vortexo Server Database Migration Tool")
 
 	if len(os.Args) < 2 {
 		log.Fatal("Usage: migrate [up|down]")

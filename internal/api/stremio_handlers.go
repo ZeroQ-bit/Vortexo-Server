@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
 	"github.com/gorilla/mux"
 )
 
@@ -165,7 +165,7 @@ func (h *Handler) StremioManifestHandler(w http.ResponseWriter, r *http.Request)
 		ID:          "com.streamarr.addon",
 		Version:     "1.0.0",
 		Name:        settings.StremioAddon.AddonName,
-		Description: "Stream movies and series from your StreamArr Pro library",
+		Description: "Stream movies and series from your Vortexo Server library",
 		Resources:   []string{"stream"},
 		Types:       []string{"movie", "series"},
 		IDPrefixes:  []string{"tt"},
@@ -695,7 +695,7 @@ func (h *Handler) StremioStreamHandler(w http.ResponseWriter, r *http.Request) {
 			// No app-side filtering: use streams as provided by the addon
 			for _, ps := range streams {
 				stream := StremioStream{
-					Name:        fmt.Sprintf("StreamArr - %s", ps.Quality),
+					Name:        fmt.Sprintf("Vortexo Server - %s", ps.Quality),
 					Description: fmt.Sprintf("%s • %.2f GB", ps.Source, float64(ps.Size)/(1024*1024*1024)),
 					URL:         ps.URL,
 					BehaviorHints: StremioStreamBehaviorHints{
@@ -727,7 +727,7 @@ func (h *Handler) StremioStreamHandler(w http.ResponseWriter, r *http.Request) {
 			// No app-side filtering: use streams as provided by the addon
 			for _, ps := range streams {
 				stream := StremioStream{
-					Name:        fmt.Sprintf("StreamArr - %s", ps.Quality),
+					Name:        fmt.Sprintf("Vortexo Server - %s", ps.Quality),
 					Description: fmt.Sprintf("%s • %.2f GB", ps.Source, float64(ps.Size)/(1024*1024*1024)),
 					URL:         ps.URL,
 					BehaviorHints: StremioStreamBehaviorHints{

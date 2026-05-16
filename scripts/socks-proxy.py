@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple SOCKS5 proxy server for StreamArr tunnel
+Simple SOCKS5 proxy server for Vortexo Server tunnel
 Runs on Mac, forwards traffic through home IP
 """
 import socket

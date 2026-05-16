@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/settings"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 // BalkanVODImporter handles importing VOD content from Balkan GitHub repos
@@ -73,7 +73,7 @@ type BalkanSeriesEntry struct {
 
 // BalkanSeason represents a season with episodes
 type BalkanSeason struct {
-	Number   int              `json:"number"`
+	Number   int             `json:"number"`
 	Episodes []BalkanEpisode `json:"episodes"`
 }
 
@@ -124,12 +124,12 @@ func extractTMDBPath(imageURL string) string {
 	if imageURL == "" {
 		return ""
 	}
-	
+
 	// If already a path (starts with /), return as-is
 	if strings.HasPrefix(imageURL, "/") {
 		return imageURL
 	}
-	
+
 	// Extract path from full TMDB URL
 	// Example: https://image.tmdb.org/t/p/w780/abc123.jpg -> /abc123.jpg
 	if idx := strings.Index(imageURL, "/t/p/"); idx != -1 {
@@ -138,7 +138,7 @@ func extractTMDBPath(imageURL string) string {
 			return imageURL[idx+5+idx2:]
 		}
 	}
-	
+
 	// If no TMDB URL pattern found, return empty
 	return ""
 }
@@ -156,7 +156,7 @@ func NewBalkanVODImporter(movieStore *database.MovieStore, seriesStore *database
 // fetchBalkanData fetches content from Balkan On Demand GitHub repo
 func fetchBalkanData() (*BalkanContentDatabase, error) {
 	log.Printf("[BalkanVOD] Fetching from GitHub: %s", balkanRepoURL)
-	
+
 	resp, err := http.Get(balkanRepoURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch balkan content: %w", err)
@@ -194,14 +194,14 @@ func FetchBalkanCategories() ([]CategoryWithCount, error) {
 
 	// Count items per category
 	categoryCounts := make(map[string]int)
-	
+
 	// Count movies
 	for _, movie := range content.Movies {
 		if movie.Category != "" {
 			categoryCounts[movie.Category]++
 		}
 	}
-	
+
 	// Count series
 	for _, series := range content.Series {
 		if series.Category != "" {
@@ -211,7 +211,7 @@ func FetchBalkanCategories() ([]CategoryWithCount, error) {
 			categoryCounts["EX YU SERIJE"]++
 		}
 	}
-	
+
 	// Convert to slice
 	var categories []CategoryWithCount
 	for name, count := range categoryCounts {
@@ -220,7 +220,7 @@ func FetchBalkanCategories() ([]CategoryWithCount, error) {
 			Count: count,
 		})
 	}
-	
+
 	log.Printf("[BalkanVOD] Returning %d categories", len(categories))
 	return categories, nil
 }
@@ -246,7 +246,7 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 
 	log.Println("[BalkanVOD] Starting import from GitHub repo...")
 	GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, 0, 0, "Fetching content from GitHub...")
-	
+
 	// Fetch content from Balkan On Demand repo
 	content, err := fetchBalkanData()
 	if err != nil {
@@ -255,15 +255,15 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 
 	totalItems := len(content.Movies) + len(content.Series)
 	log.Printf("[BalkanVOD] Fetched %d movies and %d series", len(content.Movies), len(content.Series))
-	GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, 0, totalItems, 
+	GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, 0, totalItems,
 		fmt.Sprintf("Found %d movies, %d series", len(content.Movies), len(content.Series)))
 
 	// Get selected categories from settings
 	selectedCategories := b.cfg.BalkanVODSelectedCategories
 	useAllCategories := len(selectedCategories) == 0
-	
+
 	log.Printf("[BalkanVOD] Selected categories: %v (useAll: %v)", selectedCategories, useAllCategories)
-	
+
 	// Import movies (filter by selected categories if specified)
 	imported := 0
 	skipped := 0
@@ -277,17 +277,17 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 	for i, movie := range content.Movies {
 		processedCount++
 		if i%25 == 0 {
-			GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, processedCount, totalItems, 
+			GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, processedCount, totalItems,
 				fmt.Sprintf("Importing movie: %s", movie.Name))
 		}
-		
+
 		// Filter by category ONLY if categories are explicitly selected
 		if !useAllCategories && !isInSelectedCategories(movie.Category, selectedCategories) {
 			skippedByCategory++
 			skipped++
 			continue
 		}
-		
+
 		// Check if this is actually a series (type == "series") in the movies array
 		if movie.Type == "series" {
 			// This is a series, not a movie - skip it here, it should be in the series array
@@ -295,7 +295,7 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 			skipped++
 			continue
 		}
-		
+
 		// Import ALL content when no categories selected (removed domestic-only filter)
 
 		result := b.importMovie(ctx, movie)
@@ -308,7 +308,7 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 			imported++
 		}
 	}
-	
+
 	log.Printf("[BalkanVOD] Skipped %d series found in movies array (should be in series array)", seriesFromMoviesArray)
 
 	// Import series (all series are domestic)
@@ -316,7 +316,7 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 	for i, series := range content.Series {
 		processedCount++
 		if i%10 == 0 {
-			GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, processedCount, totalItems, 
+			GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, processedCount, totalItems,
 				fmt.Sprintf("Importing series: %s", series.Name))
 		}
 		log.Printf("[BalkanVOD] Processing series: %s (ID: %s, Seasons: %d)", series.Name, series.ID, len(series.Seasons))
@@ -330,8 +330,8 @@ func (b *BalkanVODImporter) ImportBalkanVOD(ctx context.Context) error {
 			imported++
 		}
 	}
-	
-	GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, totalItems, totalItems, 
+
+	GlobalScheduler.UpdateProgress(ServiceBalkanVODSync, totalItems, totalItems,
 		fmt.Sprintf("Complete: %d new, %d updated, %d failed", imported, updated, failed))
 
 	log.Printf("[BalkanVOD] Import complete: %d new, %d updated, %d skipped (%d by category filter, %d not domestic), %d failed", imported, updated, skipped, skippedByCategory, skippedByDomestic, failed)
@@ -346,28 +346,28 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 	// Generate a unique TMDB ID based on Balkan ID to avoid constraint violations
 	// Use negative IDs to distinguish from real TMDB IDs
 	tmdbID := generateUniqueTMDBID(entry.ID)
-	
+
 	// Parse release date
 	var releaseDate *time.Time
 	if entry.Year > 0 {
 		t, _ := time.Parse("2006-01-02", fmt.Sprintf("%d-01-01", entry.Year))
 		releaseDate = &t
 	}
-	
+
 	// Create movie entry
 	movie := &models.Movie{
-		TMDBID:        tmdbID,
-		Title:         entry.Name,
-		OriginalTitle: entry.Name,
-		Overview:      entry.Description,
-		PosterPath:    extractTMDBPath(entry.Poster),
-		BackdropPath:  extractTMDBPath(entry.Background),
-		ReleaseDate:   releaseDate,
-		Runtime:       entry.GetRuntime(),
-		Monitored:     true,
-		Available:     true,
+		TMDBID:         tmdbID,
+		Title:          entry.Name,
+		OriginalTitle:  entry.Name,
+		Overview:       entry.Description,
+		PosterPath:     extractTMDBPath(entry.Poster),
+		BackdropPath:   extractTMDBPath(entry.Background),
+		ReleaseDate:    releaseDate,
+		Runtime:        entry.GetRuntime(),
+		Monitored:      true,
+		Available:      true,
 		QualityProfile: "1080p",
-		Metadata:      models.Metadata{},
+		Metadata:       models.Metadata{},
 	}
 
 	if movie.Metadata == nil {
@@ -377,7 +377,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 	movie.Metadata["source"] = "balkan_vod"
 	movie.Metadata["imported_at"] = time.Now().Format(time.RFC3339)
 	movie.Metadata["category"] = entry.Category
-	
+
 	// Prepare new streams
 	newStreams := make([]map[string]interface{}, len(entry.Streams))
 	for i, stream := range entry.Streams {
@@ -388,7 +388,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 			"source":  stream.Source,
 		}
 	}
-	
+
 	// Try to add the movie
 	err := b.movieStore.Add(ctx, movie)
 	if err != nil && (err.Error() == "movie already exists in library") {
@@ -397,7 +397,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 		existingMovie, getErr := b.movieStore.GetByTMDBID(ctx, tmdbID)
 		if getErr == nil && existingMovie != nil {
 			log.Printf("[BalkanVOD] Duplicate movie '%s' (TMDB: %d) - merging streams", entry.Name, tmdbID)
-			
+
 			// Get existing streams
 			existingStreams := []map[string]interface{}{}
 			if streams, ok := existingMovie.Metadata["balkan_vod_streams"].([]interface{}); ok {
@@ -407,7 +407,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 					}
 				}
 			}
-			
+
 			// Merge streams (remove duplicates by URL)
 			streamURLs := make(map[string]bool)
 			for _, s := range existingStreams {
@@ -415,7 +415,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 					streamURLs[url] = true
 				}
 			}
-			
+
 			for _, newStream := range newStreams {
 				if url, ok := newStream["url"].(string); ok {
 					if !streamURLs[url] {
@@ -424,18 +424,18 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 					}
 				}
 			}
-			
+
 			// Update metadata with merged streams
 			existingMovie.Metadata["balkan_vod_streams"] = existingStreams
 			existingMovie.Metadata["last_updated"] = time.Now().Format(time.RFC3339)
-			
+
 			// Update the movie in database
 			updateErr := b.movieStore.Update(ctx, existingMovie)
 			if updateErr != nil {
 				log.Printf("[BalkanVOD] Failed to update movie '%s': %v", entry.Name, updateErr)
 				return ImportResult{Error: updateErr}
 			}
-			
+
 			return ImportResult{Updated: true, Error: nil}
 		}
 		// If we can't find it, just return the error
@@ -445,7 +445,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 		log.Printf("[BalkanVOD] Error adding movie '%s': %v", entry.Name, err)
 		return ImportResult{Error: err}
 	}
-	
+
 	// Movie added successfully
 	log.Printf("[BalkanVOD] Added new movie '%s' (TMDB: %d, Category: %s)", entry.Name, tmdbID, entry.Category)
 	return ImportResult{Updated: false, Error: nil}
@@ -453,7 +453,7 @@ func (b *BalkanVODImporter) importMovie(ctx context.Context, entry BalkanMovieEn
 
 func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeriesEntry) ImportResult {
 	log.Printf("[BalkanVOD] importSeries called for: %s (Seasons: %d)", entry.Name, len(entry.Seasons))
-	
+
 	// Check if we have seasons with episodes
 	if len(entry.Seasons) == 0 {
 		log.Printf("[BalkanVOD] Series %s rejected: no seasons available", entry.Name)
@@ -469,35 +469,35 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 		log.Printf("[BalkanVOD] Series %s rejected: no episodes available (has %d seasons)", entry.Name, len(entry.Seasons))
 		return ImportResult{Error: fmt.Errorf("no episodes available")}
 	}
-	
+
 	log.Printf("[BalkanVOD] Series %s validation passed: %d seasons, %d episodes", entry.Name, len(entry.Seasons), totalEpisodes)
 
 	// Generate a unique TMDB ID based on Balkan ID to avoid constraint violations
 	// Use negative IDs to distinguish from real TMDB IDs
 	tmdbID := generateUniqueTMDBID(entry.ID)
-	
+
 	// Parse first air date
 	var firstAirDate *time.Time
 	if entry.Year > 0 {
 		t, _ := time.Parse("2006-01-02", fmt.Sprintf("%d-01-01", entry.Year))
 		firstAirDate = &t
 	}
-	
+
 	// Generate synthetic IMDB ID for Balkan VOD series
 	syntheticIMDB := fmt.Sprintf("balkan%d", -tmdbID) // Use positive value from negative TMDB ID
-	
+
 	// Create series entry
 	series := &models.Series{
-		TMDBID:        tmdbID,
-		IMDBID:        syntheticIMDB,
-		Title:         entry.Name,
-		OriginalTitle: entry.Name,
-		PosterPath:    extractTMDBPath(entry.Poster),
-		BackdropPath:  extractTMDBPath(entry.Background),
-		FirstAirDate:  firstAirDate,
-		Monitored:     true,
+		TMDBID:         tmdbID,
+		IMDBID:         syntheticIMDB,
+		Title:          entry.Name,
+		OriginalTitle:  entry.Name,
+		PosterPath:     extractTMDBPath(entry.Poster),
+		BackdropPath:   extractTMDBPath(entry.Background),
+		FirstAirDate:   firstAirDate,
+		Monitored:      true,
 		QualityProfile: "1080p",
-		Metadata:      models.Metadata{},
+		Metadata:       models.Metadata{},
 	}
 
 	if series.Metadata == nil {
@@ -509,7 +509,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 	series.Metadata["category"] = entry.Category
 	series.Metadata["total_seasons"] = len(entry.Seasons)
 	series.Metadata["total_episodes"] = totalEpisodes
-	
+
 	// Store season and episode structure
 	seasons := make([]map[string]interface{}, len(entry.Seasons))
 	for i, season := range entry.Seasons {
@@ -527,7 +527,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 			"episodes": episodes,
 		}
 	}
-	
+
 	// Try to add the series
 	series.Metadata["balkan_vod_seasons"] = seasons
 	err := b.seriesStore.Add(ctx, series)
@@ -536,7 +536,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 		existingSeries, getErr := b.seriesStore.GetByTMDBID(ctx, tmdbID)
 		if getErr == nil && existingSeries != nil {
 			log.Printf("[BalkanVOD] Duplicate series '%s' (TMDB: %d) - merging episodes", entry.Name, tmdbID)
-			
+
 			// Get existing seasons
 			existingSeasons := []map[string]interface{}{}
 			if sData, ok := existingSeries.Metadata["balkan_vod_seasons"].([]interface{}); ok {
@@ -546,10 +546,10 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 					}
 				}
 			}
-			
+
 			// Merge logic: combine episodes from matching seasons, avoiding duplicates by episode number
 			seasonMap := make(map[int]map[int]map[string]interface{}) // [seasonNum][episodeNum]episodeData
-			
+
 			// Add existing episodes to map
 			for _, season := range existingSeasons {
 				seasonNum := int(season["number"].(float64))
@@ -565,7 +565,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 					}
 				}
 			}
-			
+
 			// Add new episodes to map (will overwrite if same episode number)
 			for _, season := range seasons {
 				seasonNum := int(season["number"].(float64))
@@ -581,7 +581,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 					}
 				}
 			}
-			
+
 			// Convert map back to season array
 			mergedSeasons := []map[string]interface{}{}
 			for seasonNum, episodes := range seasonMap {
@@ -594,19 +594,19 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 					"episodes": episodeList,
 				})
 			}
-			
+
 			// Update metadata with merged seasons
 			existingSeries.Metadata["balkan_vod_seasons"] = mergedSeasons
 			existingSeries.Metadata["last_updated"] = time.Now().Format(time.RFC3339)
 			existingSeries.Metadata["total_episodes"] = len(mergedSeasons) // Update total
-			
+
 			// Update the series in database
 			updateErr := b.seriesStore.Update(ctx, existingSeries)
 			if updateErr != nil {
 				log.Printf("[BalkanVOD] Failed to update series '%s': %v", entry.Name, updateErr)
 				return ImportResult{Error: updateErr}
 			}
-			
+
 			return ImportResult{Updated: true, Error: nil}
 		}
 		// If we can't find it, return the error
@@ -616,7 +616,7 @@ func (b *BalkanVODImporter) importSeries(ctx context.Context, entry BalkanSeries
 		log.Printf("[BalkanVOD] Error adding series '%s': %v", entry.Name, err)
 		return ImportResult{Error: err}
 	}
-	
+
 	// Series added successfully
 	log.Printf("[BalkanVOD] Added new series '%s' (TMDB: %d, Category: %s)", entry.Name, tmdbID, entry.Category)
 	return ImportResult{Updated: false, Error: nil}
@@ -644,7 +644,7 @@ func isInSelectedCategories(category string, selectedCategories []string) bool {
 func mergeStreams(existingStreams, newStreams interface{}) []map[string]interface{} {
 	var result []map[string]interface{}
 	seenURLs := make(map[string]bool)
-	
+
 	// Add existing streams
 	if existing, ok := existingStreams.([]map[string]interface{}); ok {
 		for _, stream := range existing {
@@ -667,7 +667,7 @@ func mergeStreams(existingStreams, newStreams interface{}) []map[string]interfac
 			}
 		}
 	}
-	
+
 	// Add new streams (avoiding duplicates)
 	if newStreamsSlice, ok := newStreams.([]map[string]interface{}); ok {
 		for _, stream := range newStreamsSlice {
@@ -679,7 +679,7 @@ func mergeStreams(existingStreams, newStreams interface{}) []map[string]interfac
 			}
 		}
 	}
-	
+
 	log.Printf("[BalkanVOD] Merged streams: %d existing + new = %d total unique", len(seenURLs)-len(result), len(result))
 	return result
 }
@@ -690,7 +690,7 @@ func extractTMDBFromPoster(posterURL string) int {
 	if posterURL == "" {
 		return 0
 	}
-	
+
 	// For now, return 0 - the poster URL doesn't contain TMDB ID
 	// We'll rely on title matching via TMDB API
 	return 0
@@ -710,5 +710,3 @@ func generateUniqueTMDBID(balkanID string) int {
 	positiveHash := int(hash%2147483647) + 1
 	return -positiveHash
 }
-
-

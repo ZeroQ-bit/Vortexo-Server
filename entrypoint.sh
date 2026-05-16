@@ -1,12 +1,12 @@
 #!/bin/sh
 
-# StreamArr Pro Docker Entrypoint
+# Vortexo Server Docker Entrypoint
 # Starts both the API server and background worker processes
 
 set -e
 
 echo "╔════════════════════════════════════════╗"
-echo "║   StreamArr Pro Container Starting     ║"
+echo "║   Vortexo Server Container Starting    ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 

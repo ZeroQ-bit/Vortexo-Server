@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# StreamArr Pro - Stop All Services
+# Vortexo Server - Stop All Services
 echo "╔════════════════════════════════════════╗"
-echo "║     Stopping StreamArr Pro Services    ║"
+echo "║     Stopping Vortexo Server Services    ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 

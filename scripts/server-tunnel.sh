@@ -1,5 +1,5 @@
 #!/bin/bash
-# StreamArr SOCKS Proxy via Home Router
+# Vortexo Server SOCKS Proxy via Home Router
 # Runs on server to create SOCKS proxy via home IP
 
 ROUTER_IP="${ROUTER_IP:-}"
@@ -14,7 +14,7 @@ if [ -z "$ROUTER_IP" ] || [ -z "$ROUTER_USER" ] || [ -z "$ROUTER_PASS" ]; then
     exit 1
 fi
 
-echo "[$(date)] StreamArr Tunnel starting..."
+echo "[$(date)] Vortexo Server Tunnel starting..."
 echo "Router: ${ROUTER_USER}@${ROUTER_IP}:${ROUTER_PORT}"
 echo "SOCKS: localhost:${SOCKS_PORT}"
 

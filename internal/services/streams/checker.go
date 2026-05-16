@@ -1,14 +1,14 @@
 package streams
 
 import (
-"github.com/Zerr0-C00L/StreamArr/internal/models"
 	"context"
 	"fmt"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"log/slog"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/services/debrid"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
 )
 
 // CheckerConfig holds configuration for stream checker
@@ -33,14 +33,14 @@ func DefaultCheckerConfig() CheckerConfig {
 
 // StreamChecker manages background availability checks and upgrades
 type StreamChecker struct {
-	config              CheckerConfig
-	cacheStore          *database.StreamCacheStore
-	streamSvc           *StreamService
-	debrid              debrid.DebridService
-	logger              *slog.Logger
-	stopChan            chan struct{}
-	indexerFunc         func(ctx context.Context, mediaID int) ([]models.TorrentStream, error) // Function to search indexers
-	settingsGetter      func() (excludedGroups, excludedQualities, excludedLanguages string, filtersEnabled bool) // Get filter settings
+	config         CheckerConfig
+	cacheStore     *database.StreamCacheStore
+	streamSvc      *StreamService
+	debrid         debrid.DebridService
+	logger         *slog.Logger
+	stopChan       chan struct{}
+	indexerFunc    func(ctx context.Context, mediaID int) ([]models.TorrentStream, error)                    // Function to search indexers
+	settingsGetter func() (excludedGroups, excludedQualities, excludedLanguages string, filtersEnabled bool) // Get filter settings
 }
 
 // NewStreamChecker creates a new stream checker
@@ -55,16 +55,16 @@ func NewStreamChecker(
 	if logger == nil {
 		logger = slog.Default()
 	}
-	
+
 	return &StreamChecker{
-		config:              config,
-		cacheStore:          cacheStore,
-		streamSvc:           streamSvc,
-		debrid:              debridSvc,
-		indexerFunc:         indexerFunc,
-		logger:              logger,
-		stopChan:            make(chan struct{}),
-		settingsGetter:      nil, // Will be set by SetSettingsGetter
+		config:         config,
+		cacheStore:     cacheStore,
+		streamSvc:      streamSvc,
+		debrid:         debridSvc,
+		indexerFunc:    indexerFunc,
+		logger:         logger,
+		stopChan:       make(chan struct{}),
+		settingsGetter: nil, // Will be set by SetSettingsGetter
 	}
 }
 
@@ -82,17 +82,17 @@ func (c *StreamChecker) GetConfig() CheckerConfig {
 func (c *StreamChecker) Start(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(c.config.CheckIntervalMinutes) * time.Minute)
 	defer ticker.Stop()
-	
+
 	c.logger.Info("Stream checker started",
 		"interval_minutes", c.config.CheckIntervalMinutes,
 		"batch_size", c.config.BatchSize,
 		"auto_upgrade", c.config.AutoUpgrade)
-	
+
 	// Run initial check immediately
 	if err := c.RunCheck(ctx); err != nil {
 		c.logger.Error("Initial stream check failed", "error", err)
 	}
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -118,22 +118,22 @@ func (c *StreamChecker) Stop() {
 func (c *StreamChecker) RunCheck(ctx context.Context) error {
 	startTime := time.Now()
 	c.logger.Info("Starting stream availability check")
-	
+
 	// Get streams due for checking
 	streams, err := c.cacheStore.GetStreamsDueForCheck(ctx, c.config.BatchSize)
 	if err != nil {
 		return fmt.Errorf("failed to get streams for check: %w", err)
 	}
-	
+
 	if len(streams) == 0 {
 		c.logger.Info("No streams due for checking")
 		return nil
 	}
-	
+
 	c.logger.Info("Checking stream availability",
 		"count", len(streams),
 		"batch_size", c.config.BatchSize)
-	
+
 	// Extract hashes for batch debrid check
 	hashes := make([]string, len(streams))
 	hashToStream := make(map[string]*models.CachedStream)
@@ -141,24 +141,24 @@ func (c *StreamChecker) RunCheck(ctx context.Context) error {
 		hashes[i] = stream.StreamHash
 		hashToStream[stream.StreamHash] = stream
 	}
-	
+
 	// Batch check debrid cache status
 	cached, err := c.debrid.CheckCache(ctx, hashes)
 	if err != nil {
 		c.logger.Error("Debrid cache check failed", "error", err)
 		return fmt.Errorf("debrid cache check failed: %w", err)
 	}
-	
+
 	// Process each stream
 	var stillCached, expired, upgraded, upgradeAvailable int
-	
+
 	for hash, isCached := range cached {
 		stream := hashToStream[hash]
-		
+
 		if isCached {
 			// Stream still cached on debrid
 			stillCached++
-			
+
 			// Check for better quality version
 			if c.config.AutoUpgrade {
 				if err := c.checkForUpgrade(ctx, stream); err != nil {
@@ -169,21 +169,21 @@ func (c *StreamChecker) RunCheck(ctx context.Context) error {
 					upgradeAvailable++
 				}
 			}
-			
+
 			// Schedule next check in 7 days
 			if err := c.cacheStore.UpdateNextCheck(ctx, stream.MovieID, 7); err != nil {
 				c.logger.Error("Failed to update next check",
 					"media_id", stream.MovieID,
 					"error", err)
 			}
-			
+
 		} else {
 			// Stream expired from debrid cache
 			expired++
 			c.logger.Warn("Stream expired from debrid cache",
 				"media_id", stream.MovieID,
 				"title", stream.StreamURL)
-			
+
 			// Try to find replacement
 			replaced, err := c.findReplacement(ctx, stream)
 			if err != nil {
@@ -210,7 +210,7 @@ func (c *StreamChecker) RunCheck(ctx context.Context) error {
 			}
 		}
 	}
-	
+
 	duration := time.Since(startTime)
 	c.logger.Info("Stream check completed",
 		"duration_seconds", duration.Seconds(),
@@ -219,7 +219,7 @@ func (c *StreamChecker) RunCheck(ctx context.Context) error {
 		"expired", expired,
 		"upgraded", upgraded,
 		"upgrade_available", upgradeAvailable)
-	
+
 	return nil
 }
 
@@ -229,35 +229,35 @@ func (c *StreamChecker) checkForUpgrade(ctx context.Context, current *models.Cac
 	if c.indexerFunc == nil {
 		return nil
 	}
-	
+
 	// Search indexers for this media
 	results, err := c.indexerFunc(ctx, current.MovieID)
 	if err != nil {
 		return fmt.Errorf("indexer search failed: %w", err)
 	}
-	
+
 	if len(results) == 0 {
 		return nil // No results
 	}
-	
+
 	// Accept all streams from addon - filtering handled at addon URL level
 	c.logger.Info("Received streams from addon (addon-level filtering already applied)",
 		"stream_count", len(results))
-	
+
 	if len(results) == 0 {
 		return nil // All streams filtered out
 	}
-	
+
 	// Find best cached stream
 	best, err := c.streamSvc.FindBestCachedStream(ctx, results)
 	if err != nil {
 		return fmt.Errorf("failed to find best stream: %w", err)
 	}
-	
+
 	if best == nil {
 		return nil // No cached streams available
 	}
-	
+
 	// Check if upgrade is worthwhile
 	currentStream := models.TorrentStream{
 		Hash:         current.StreamHash,
@@ -267,9 +267,9 @@ func (c *StreamChecker) checkForUpgrade(ctx context.Context, current *models.Cac
 		Source:       current.SourceType,
 		SizeGB:       current.FileSizeGB,
 	}
-	
+
 	shouldUpgrade := c.streamSvc.ShouldUpgrade(currentStream, *best, c.config.MinUpgradePoints)
-	
+
 	if shouldUpgrade {
 		// Check size increase limit
 		sizeIncrease := best.SizeGB - current.FileSizeGB
@@ -279,22 +279,22 @@ func (c *StreamChecker) checkForUpgrade(ctx context.Context, current *models.Cac
 				"current_size_gb", current.FileSizeGB,
 				"new_size_gb", best.SizeGB,
 				"increase_gb", sizeIncrease)
-			
+
 			// Mark upgrade available but don't auto-upgrade
 			return c.cacheStore.MarkUpgradeAvailable(ctx, current.MovieID, true)
 		}
-		
+
 		// Get stream URL from debrid
 		streamURL, err := c.debrid.GetStreamURL(ctx, best.Hash, 0)
 		if err != nil {
 			return fmt.Errorf("failed to get stream URL: %w", err)
 		}
-		
+
 		// Upgrade to better stream
 		if err := c.cacheStore.CacheStream(ctx, current.MovieID, *best, streamURL); err != nil {
 			return fmt.Errorf("failed to cache upgraded stream: %w", err)
 		}
-		
+
 		c.logger.Info("Auto-upgraded to better stream",
 			"media_id", current.MovieID,
 			"old_score", current.QualityScore,
@@ -302,15 +302,15 @@ func (c *StreamChecker) checkForUpgrade(ctx context.Context, current *models.Cac
 			"improvement", best.QualityScore-current.QualityScore,
 			"old_resolution", current.Resolution,
 			"new_resolution", best.Resolution)
-		
+
 		return nil
 	}
-	
+
 	// Check if there's a slight improvement worth flagging
 	if best.QualityScore > current.QualityScore+10 {
 		return c.cacheStore.MarkUpgradeAvailable(ctx, current.MovieID, true)
 	}
-	
+
 	return nil
 }
 
@@ -320,48 +320,48 @@ func (c *StreamChecker) findReplacement(ctx context.Context, expired *models.Cac
 	if c.indexerFunc == nil {
 		return false, nil
 	}
-	
+
 	// Search indexers for this media
 	results, err := c.indexerFunc(ctx, expired.MovieID)
 	if err != nil {
 		return false, fmt.Errorf("indexer search failed: %w", err)
 	}
-	
+
 	if len(results) == 0 {
 		c.logger.Warn("No replacement streams found",
 			"media_id", expired.MovieID)
 		return false, nil
 	}
-	
+
 	// Find best cached stream
 	best, err := c.streamSvc.FindBestCachedStream(ctx, results)
 	if err != nil {
 		return false, fmt.Errorf("failed to find best stream: %w", err)
 	}
-	
+
 	if best == nil {
 		c.logger.Warn("No cached replacement available",
 			"media_id", expired.MovieID)
 		return false, nil
 	}
-	
+
 	// Get stream URL from debrid
 	streamURL, err := c.debrid.GetStreamURL(ctx, best.Hash, 0)
 	if err != nil {
 		return false, fmt.Errorf("failed to get stream URL: %w", err)
 	}
-	
+
 	// Cache replacement stream
 	if err := c.cacheStore.CacheStream(ctx, expired.MovieID, *best, streamURL); err != nil {
 		return false, fmt.Errorf("failed to cache replacement: %w", err)
 	}
-	
+
 	c.logger.Info("Cached replacement stream",
 		"media_id", expired.MovieID,
 		"old_score", expired.QualityScore,
 		"new_score", best.QualityScore,
 		"resolution", best.Resolution)
-	
+
 	return true, nil
 }
 
@@ -371,38 +371,38 @@ func (c *StreamChecker) CheckSpecificStream(ctx context.Context, mediaID int) er
 	if err != nil {
 		return fmt.Errorf("failed to get cached stream: %w", err)
 	}
-	
+
 	if cached == nil {
 		return fmt.Errorf("no cached stream for media_id %d", mediaID)
 	}
-	
+
 	// Check if still cached on debrid
 	cacheStatus, err := c.debrid.CheckCache(ctx, []string{cached.StreamHash})
 	if err != nil {
 		return fmt.Errorf("debrid cache check failed: %w", err)
 	}
-	
+
 	isCached := cacheStatus[cached.StreamHash]
-	
+
 	if isCached {
 		c.logger.Info("Stream still cached on debrid",
 			"media_id", mediaID)
-		
+
 		// Check for upgrade
 		if c.config.AutoUpgrade {
 			if err := c.checkForUpgrade(ctx, cached); err != nil {
 				return fmt.Errorf("upgrade check failed: %w", err)
 			}
 		}
-		
+
 		// Update next check
 		return c.cacheStore.UpdateNextCheck(ctx, mediaID, 7)
 	}
-	
+
 	// Stream expired, find replacement
 	c.logger.Warn("Stream expired, finding replacement",
 		"media_id", mediaID)
-	
+
 	replaced, err := c.findReplacement(ctx, cached)
 	if err != nil {
 		// Mark unavailable
@@ -413,7 +413,7 @@ func (c *StreamChecker) CheckSpecificStream(ctx context.Context, mediaID int) er
 		}
 		return fmt.Errorf("failed to find replacement: %w", err)
 	}
-	
+
 	if !replaced {
 		// No replacement available
 		if err := c.cacheStore.MarkUnavailable(ctx, mediaID); err != nil {
@@ -421,7 +421,7 @@ func (c *StreamChecker) CheckSpecificStream(ctx context.Context, mediaID int) er
 		}
 		return fmt.Errorf("no replacement available for media_id %d", mediaID)
 	}
-	
+
 	return nil
 }
 
@@ -431,13 +431,13 @@ func (c *StreamChecker) GetStats(ctx context.Context) (map[string]interface{}, e
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Add checker config to stats
 	stats := make(map[string]interface{})
 	for k, v := range cacheStats {
 		stats[k] = v
 	}
-	
+
 	stats["checker_config"] = map[string]interface{}{
 		"check_interval_minutes": c.config.CheckIntervalMinutes,
 		"batch_size":             c.config.BatchSize,
@@ -445,6 +445,6 @@ func (c *StreamChecker) GetStats(ctx context.Context) (map[string]interface{}, e
 		"min_upgrade_points":     c.config.MinUpgradePoints,
 		"max_upgrade_size_gb":    c.config.MaxUpgradeSizeGB,
 	}
-	
+
 	return stats, nil
 }

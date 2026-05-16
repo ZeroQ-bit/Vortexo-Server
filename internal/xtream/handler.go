@@ -18,12 +18,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
-	"github.com/Zerr0-C00L/StreamArr/internal/epg"
-	"github.com/Zerr0-C00L/StreamArr/internal/livetv"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/epg"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/livetv"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 	"github.com/gorilla/mux"
 )
 
@@ -1159,7 +1159,7 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 			"plot":                plot,
 			"added":               addedInt,
 			"last_modified":       addedInt,
-			"group":               "StreamArr",
+			"group":               "Vortexo Server",
 		}
 
 		// Filter by category if specified (skip for collection filter since SQL already filtered)
@@ -2085,7 +2085,7 @@ func (h *XtreamHandler) handleXMLTV(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error generating XMLTV: %v", err)
 		// Return empty structure on error
 		xmltv = `<?xml version="1.0" encoding="UTF-8"?>
-<tv generator-info-name="StreamArr">
+<tv generator-info-name="Vortexo Server">
 </tv>`
 	}
 

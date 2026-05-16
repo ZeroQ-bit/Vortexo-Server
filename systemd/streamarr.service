@@ -1,5 +1,5 @@
 [Unit]
-Description=StreamArr Pro Server
+Description=Vortexo Server
 After=network.target postgresql.service
 Requires=postgresql.service
 

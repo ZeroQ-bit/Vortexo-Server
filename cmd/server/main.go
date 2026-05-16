@@ -17,20 +17,20 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/api"
-	"github.com/Zerr0-C00L/StreamArr/internal/cache"
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/epg"
-	"github.com/Zerr0-C00L/StreamArr/internal/livetv"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/playlist"
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
-	"github.com/Zerr0-C00L/StreamArr/internal/services/debrid"
-	"github.com/Zerr0-C00L/StreamArr/internal/services/streams"
-	"github.com/Zerr0-C00L/StreamArr/internal/settings"
-	"github.com/Zerr0-C00L/StreamArr/internal/xtream"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/api"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/cache"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/epg"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/livetv"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/playlist"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/xtream"
 )
 
 func envInt(keys ...string) (int, bool) {
@@ -67,7 +67,7 @@ func main() {
 		log.Println("Warning: .env file not found, using environment variables")
 	}
 
-	log.Println("Starting StreamArr API Server...")
+	log.Println("Starting Vortexo Server API...")
 
 	// Load initial configuration (uses DATABASE_URL from environment if set)
 	cfg := config.Load()

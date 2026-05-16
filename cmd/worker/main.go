@@ -11,16 +11,16 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/cache"
-	"github.com/Zerr0-C00L/StreamArr/internal/config"
-	"github.com/Zerr0-C00L/StreamArr/internal/database"
-	"github.com/Zerr0-C00L/StreamArr/internal/epg"
-	"github.com/Zerr0-C00L/StreamArr/internal/livetv"
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/playlist"
-	"github.com/Zerr0-C00L/StreamArr/internal/providers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
-	"github.com/Zerr0-C00L/StreamArr/internal/settings"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/cache"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/config"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/epg"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/livetv"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/playlist"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 	}
 	defer db.Close()
 
-	log.Println("🤖 StreamArr Background Workers Starting...")
+	log.Println("Vortexo Server Background Workers Starting...")
 	log.Println("========================================")
 
 	// Initialize settings manager and load from database

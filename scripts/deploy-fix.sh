@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# StreamArr Pro - Quick Deploy to Cloud Server
+# Vortexo Server - Quick Deploy to Cloud Server
 # Fixes Apple TV Chillio IPTV playback hanging issue
 
 set -e  # Exit on any error
@@ -8,7 +8,7 @@ set -e  # Exit on any error
 SERVER="root@77.42.16.119"
 REMOTE_PATH="/root/streamarr-pro"
 
-echo "🚀 StreamArr Pro - Deploying Playback Fix to Cloud Server"
+echo "🚀 Vortexo Server - Deploying Playback Fix to Cloud Server"
 echo "=================================================="
 echo ""
 
@@ -37,7 +37,7 @@ echo "✓ Upload successful"
 echo ""
 
 # Restart service on server
-echo "🔄 Restarting StreamArr service on server..."
+echo "🔄 Restarting Vortexo Server service on server..."
 ssh "$SERVER" << 'ENDSSH'
     cd /root/streamarr
     

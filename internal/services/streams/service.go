@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
-	"github.com/Zerr0-C00L/StreamArr/internal/services/debrid"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
 )
 
 // StreamService manages stream selection and caching

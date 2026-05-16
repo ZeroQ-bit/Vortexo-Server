@@ -1,5 +1,5 @@
 #!/bin/sh
-# StreamArr Router Tunnel - Maintains SSH tunnel to bypass Cloudflare
+# Vortexo Server Router Tunnel - Maintains SSH tunnel to bypass Cloudflare
 # This script runs on Asus router to route Torrentio traffic through home IP
 
 while true; do

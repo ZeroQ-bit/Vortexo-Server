@@ -1,8 +1,8 @@
 #!/bin/bash
-# StreamArr Tunnel Keeper - Run on Mac to maintain server tunnel
+# Vortexo Server Tunnel Keeper - Run on Mac to maintain server tunnel
 # Keeps SSH tunnel alive so server can bypass Cloudflare
 
-echo "🚀 StreamArr Tunnel Keeper starting..."
+echo "🚀 Vortexo Server Tunnel Keeper starting..."
 echo "This will route server traffic through your home IP"
 echo ""
 

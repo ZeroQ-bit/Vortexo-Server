@@ -1,4 +1,4 @@
-module github.com/Zerr0-C00L/StreamArr
+module github.com/ZeroQ-bit/Vortexo-Server
 
 go 1.24.0
 

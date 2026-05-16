@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# StreamArr Pro Stop Script
-# Stops all StreamArr Pro services
+# Vortexo Server Stop Script
+# Stops all Vortexo Server services
 
-echo "Stopping StreamArr Pro services..."
+echo "Stopping Vortexo Server services..."
 
 # Kill processes by PID files
 if [ -f logs/server.pid ]; then
@@ -28,4 +28,4 @@ fi
 pkill -f "bin/server" 2>/dev/null || true
 pkill -f "bin/worker" 2>/dev/null || true
 
-echo "✅ StreamArr Pro services stopped"
+echo "✅ Vortexo Server services stopped"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# StreamArr Pro Auto-Update Script
+# Vortexo Server Auto-Update Script
 # This script pulls the latest code and updates the deployment
 
 set -e
@@ -51,7 +51,7 @@ fi
 echo $$ > "$LOCK_FILE"
 trap "rm -f $LOCK_FILE" EXIT
 
-log "Starting StreamArr Pro update..."
+log "Starting Vortexo Server update..."
 
 # Get the branch parameter (default: main)
 BRANCH="${1:-main}"
@@ -241,7 +241,7 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Package path for ldflags
-PKG="github.com/Zerr0-C00L/StreamArr/internal/api"
+PKG="github.com/ZeroQ-bit/Vortexo-Server/internal/api"
 
 # Build frontend if node is available
 if command -v npm &> /dev/null; then

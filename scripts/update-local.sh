@@ -1,7 +1,7 @@
 #!/bin/bash
-# Update local StreamArr Pro installation
+# Update local Vortexo Server installation
 
-echo "🔄 Updating StreamArr Pro..."
+echo "🔄 Updating Vortexo Server..."
 echo ""
 
 # Pull latest code
@@ -32,4 +32,4 @@ echo "Current version:"
 curl -s http://localhost:8080/api/v1/version | jq .
 
 echo ""
-echo "🎉 StreamArr Pro is now running the latest version!"
+echo "🎉 Vortexo Server is now running the latest version!"

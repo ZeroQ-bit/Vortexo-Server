@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# StreamArr Pro - Start All Services
+# Vortexo Server - Start All Services
 echo "╔════════════════════════════════════════╗"
-echo "║     Starting StreamArr Pro Services    ║"
+echo "║     Starting Vortexo Server Services    ║"
 echo "╚════════════════════════════════════════╝"
 echo ""
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# StreamArr Pro Build Script
+# Vortexo Server Build Script
 # Automatically embeds version info from git tags
 
 # Get version from latest git tag, or default to "main"
@@ -9,12 +9,12 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Package path for ldflags
-PKG="github.com/Zerr0-C00L/StreamArr/internal/api"
+PKG="github.com/ZeroQ-bit/Vortexo-Server/internal/api"
 
 # Build flags
 LDFLAGS="-X '${PKG}.Version=${VERSION}' -X '${PKG}.Commit=${COMMIT}' -X '${PKG}.BuildDate=${BUILD_DATE}'"
 
-echo "Building StreamArr Pro..."
+echo "Building Vortexo Server..."
 echo "  Version: ${VERSION}"
 echo "  Commit:  ${COMMIT}"
 echo "  Date:    ${BUILD_DATE}"

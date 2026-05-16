@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/scrapers"
-	"github.com/Zerr0-C00L/StreamArr/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/scrapers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 )
 
 // AutoEmbedAdapter adapts AutoEmbed scraper to StreamProvider interface
@@ -33,13 +33,13 @@ func (a *AutoEmbedAdapter) GetMovieStreams(imdbID string) ([]TorrentioStream, er
 	// AutoEmbed returns single stream per region, try multiple regions
 	regions := []string{"US", "EU", "UK"}
 	streams := make([]TorrentioStream, 0)
-	
+
 	for _, region := range regions {
 		source, err := a.client.GetMovieStream(fmt.Sprintf("%d", tmdbID), region)
 		if err != nil {
 			continue // Try next region
 		}
-		
+
 		if source != nil {
 			quality := inferQuality(source.Server, source.Region)
 			streams = append(streams, TorrentioStream{
@@ -71,13 +71,13 @@ func (a *AutoEmbedAdapter) GetSeriesStreams(imdbID string, season, episode int) 
 	// AutoEmbed returns single stream per region, try multiple regions
 	regions := []string{"US", "EU", "UK"}
 	streams := make([]TorrentioStream, 0)
-	
+
 	for _, region := range regions {
 		source, err := a.client.GetSeriesStream(fmt.Sprintf("%d", tmdbID), season, episode, region)
 		if err != nil {
 			continue // Try next region
 		}
-		
+
 		if source != nil {
 			quality := inferQuality(source.Server, source.Region)
 			streams = append(streams, TorrentioStream{
@@ -101,7 +101,7 @@ func (a *AutoEmbedAdapter) GetSeriesStreams(imdbID string, season, episode int) 
 // inferQuality infers quality from server name and region
 func inferQuality(serverName, region string) string {
 	lower := strings.ToLower(serverName)
-	
+
 	// Some servers indicate quality in name
 	if strings.Contains(lower, "4k") || strings.Contains(lower, "2160") {
 		return "2160p"
@@ -110,12 +110,12 @@ func inferQuality(serverName, region string) string {
 	} else if strings.Contains(lower, "720") {
 		return "720p"
 	}
-	
+
 	// Premium regions typically have better quality
 	if region == "EU" || region == "US" {
 		return "1080p"
 	}
-	
+
 	// Default
 	return "720p"
 }

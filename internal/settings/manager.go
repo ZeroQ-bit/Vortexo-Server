@@ -258,7 +258,7 @@ func getDefaultSettings() *Settings {
 		StremioAddon: StremioAddonConfig{
 			Enabled:         true, // Enabled by default for built-in addon
 			PublicServerURL: "",
-			AddonName:       "StreamArr Pro",
+			AddonName:       "Vortexo Server",
 			SharedToken:     "",
 			PerUserTokens:   false,
 			Catalogs: []StremioCatalogConfig{

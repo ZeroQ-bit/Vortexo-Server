@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/auth"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 

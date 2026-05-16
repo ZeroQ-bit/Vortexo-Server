@@ -1,7 +1,7 @@
-# StreamArr Pro
+# Vortexo Server
 
 <p align="center">
-  <img src="streamarr-pro-ui/public/logo.png" alt="StreamArr Pro" width="150">
+  <img src="streamarr-pro-ui/public/logo.png" alt="Vortexo Server" width="150">
 </p>
 
 <p align="center">
@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  StreamArr Pro combines a Netflix-style library UI, Stremio-compatible stream discovery,<br>
+  Vortexo Server combines a Netflix-style library UI, Stremio-compatible stream discovery,<br>
   live TV / IPTV output, and Debrid-backed playback links for IPTV apps.
 </p>
 
 <p align="center">
-  <a href="https://github.com/ZeroQ-bit/StreamArr-Pro/releases"><img src="https://img.shields.io/github/v/release/ZeroQ-bit/StreamArr-Pro?style=for-the-badge&logo=github&color=blue" alt="Release"></a>
+  <a href="https://github.com/ZeroQ-bit/Vortexo-Server/releases"><img src="https://img.shields.io/github/v/release/ZeroQ-bit/Vortexo-Server?style=for-the-badge&logo=github&color=blue" alt="Release"></a>
   <a href="#-quick-start"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker" alt="Docker"></a>
   <a href="#"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go" alt="Go"></a>
   <a href="#"><img src="https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react" alt="React"></a>
@@ -42,15 +42,15 @@
 
 ---
 
-## 🧭 What StreamArr Pro Is
+## 🧭 What Vortexo Server Is
 
-StreamArr Pro is a self-hosted media manager that sits between discovery, cached stream sources, and IPTV apps:
+Vortexo Server is a self-hosted media manager that sits between discovery, cached stream sources, and IPTV apps:
 
 - **Library manager** for movies and shows using TMDB metadata
 - **Discovery layer** for Stremio-compatible providers such as Torrentio, Comet, and MediaFusion
 - **IPTV server** with Xtream Codes and M3U output for players like TiviMate and VLC
 
-StreamArr is not meant to be a traditional downloader. It tracks metadata, checks cached streams, and exposes playable IPTV endpoints while dedicated media managers handle filesystem libraries.
+Vortexo Server is not meant to be a traditional downloader. It tracks metadata, checks cached streams, and exposes playable IPTV endpoints while dedicated media managers handle filesystem libraries.
 
 ## 🆕 What We Added Recently
 
@@ -127,8 +127,8 @@ StreamArr is not meant to be a traditional downloader. It tracks metadata, check
 
 ```bash
 # Clone the repository
-git clone https://github.com/ZeroQ-bit/StreamArr-Pro.git
-cd StreamArr-Pro
+git clone https://github.com/ZeroQ-bit/Vortexo-Server.git
+cd Vortexo-Server
 
 # Start with Docker Compose
 docker compose up -d
@@ -160,7 +160,7 @@ docker compose logs -f streamarr
 
 ```bash
 # 1. Clone to your preferred location
-git clone https://github.com/ZeroQ-bit/StreamArr-Pro.git /opt/streamarr
+git clone https://github.com/ZeroQ-bit/Vortexo-Server.git /opt/streamarr
 cd /opt/streamarr
 
 # 2. (Optional) Configure environment
@@ -181,8 +181,8 @@ docker ps
 ssh user@your-server-ip
 
 # Clone repository
-git clone https://github.com/ZeroQ-bit/StreamArr-Pro.git ~/StreamArr-Pro
-cd ~/StreamArr-Pro
+git clone https://github.com/ZeroQ-bit/Vortexo-Server.git ~/Vortexo-Server
+cd ~/Vortexo-Server
 
 # Start with Docker Compose (always from this directory!)
 docker compose up -d --build
@@ -205,7 +205,7 @@ The **Update App** button in Settings will:
 
 If updates aren't working, rebuild from the correct directory:
 ```bash
-cd /path/to/StreamArr-Pro  # Your cloned repository
+cd /path/to/Vortexo-Server  # Your cloned repository
 docker compose down
 docker compose up -d --build
 ```
@@ -213,7 +213,7 @@ docker compose up -d --build
 ### Manual Update
 
 ```bash
-cd /path/to/StreamArr-Pro
+cd /path/to/Vortexo-Server
 git pull origin main
 docker compose down
 docker compose up -d --build
@@ -237,7 +237,7 @@ volumes:
 
 - **API keys do not belong in the repository.** Add them through the UI or in a local `.env` file that is not committed.
 - `.env.example`, `docker-compose.yml`, and `systemd/` files in this repo only contain placeholders or example defaults.
-- If you fork or deploy StreamArr, change example JWT / password defaults before exposing the app outside your local network.
+- If you fork or deploy Vortexo Server, change example JWT / password defaults before exposing the app outside your local network.
 
 ## ⚙️ Configuration
 
@@ -273,8 +273,8 @@ Add Stremio-compatible provider URLs:
 - **Real-Debrid Library Sync** adds the best cached library stream into your RD library when enabled
 - **Stream cache checks** mark movies and episodes as available or unavailable for IPTV filters
 - **DMM Provider Mode** can be enabled to query cached hash data as another stream source
-- **DMM Hashlist Import** adds high-confidence movies and series from public DMM hashlists after your content/release exclusions; if Real-Debrid disables bulk cache checks, StreamArr trusts the DMM cache marker and still verifies playback through Real-Debrid before serving
-- **Important:** Plex-visible folders are handled outside StreamArr; use Riven or another filesystem library manager for that workflow
+- **DMM Hashlist Import** adds high-confidence movies and series from public DMM hashlists after your content/release exclusions; if Real-Debrid disables bulk cache checks, Vortexo Server trusts the DMM cache marker and still verifies playback through Real-Debrid before serving
+- **Important:** Plex-visible folders are handled outside Vortexo Server; use Riven or another filesystem library manager for that workflow
 
 ---
 
@@ -310,7 +310,7 @@ http://YOUR-IP:8080/get.php?username=user&password=pass&type=m3u_plus&output=ts
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        StreamArr Pro                             │
+│                        Vortexo Server                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌──────────────┐    ┌──────────────┐    ┌─────────────────┐   │
@@ -429,7 +429,7 @@ docker compose down -v && docker compose up -d
 ## 📁 Project Structure
 
 ```
-StreamArr-Pro/
+Vortexo-Server/
 ├── cmd/                    # Application entrypoints
 │   ├── server/             # Main server
 │   ├── worker/             # Background worker
@@ -475,7 +475,7 @@ MIT License - see [LICENSE.md](LICENSE.md)
 
 ## ☕ Support
 
-If StreamArr Pro is useful to you, consider supporting development:
+If Vortexo Server is useful to you, consider supporting development:
 
 <a href="https://ko-fi.com/zeroq"><img src="https://www.ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi"></a>
 
@@ -483,7 +483,7 @@ If StreamArr Pro is useful to you, consider supporting development:
 
 ## ⚠️ Disclaimer
 
-StreamArr Pro is a self-hosted media organizer for **personal, lawful use only**. It does not host, index, or distribute any media content. Users are responsible for ensuring compliance with local laws and terms of service for any third-party services they configure.
+Vortexo Server is a self-hosted media organizer for **personal, lawful use only**. It does not host, index, or distribute any media content. Users are responsible for ensuring compliance with local laws and terms of service for any third-party services they configure.
 
 ---
 

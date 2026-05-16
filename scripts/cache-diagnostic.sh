@@ -1,8 +1,8 @@
 #!/bin/bash
-# StreamArr Cache Diagnostic Script
+# Vortexo Server Cache Diagnostic Script
 # Run this to diagnose cache and playlist issues
 
-echo "=== StreamArr Cache Monitor Diagnostic ==="
+echo "=== Vortexo Server Cache Monitor Diagnostic ==="
 echo ""
 echo "Server URL: ${SERVER_URL:-http://localhost:8888}"
 echo "Username: ${USERNAME:-streamarr}"

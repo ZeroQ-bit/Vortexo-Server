@@ -115,8 +115,8 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center gap-8">
             {/* Logo */}
             <Link to="/" className="flex items-center gap-2">
-              <img src="/logo.png" alt="StreamArr" className="w-8 h-8" />
-              <span className="text-xl font-bold text-red-600 hidden sm:block">StreamArr</span>
+              <img src="/logo.png" alt="Vortexo Server" className="w-8 h-8" />
+              <span className="text-xl font-bold text-red-600 hidden sm:block">Vortexo Server</span>
             </Link>
 
             {/* Desktop Navigation */}

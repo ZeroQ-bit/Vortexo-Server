@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Zerr0-C00L/StreamArr/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 )
 
 type StreamStore struct {
@@ -272,7 +272,7 @@ func (s *StreamStore) FindBestStreamWithFilters(ctx context.Context, contentType
 			}
 		}
 		if len(validPatterns) > 0 {
-			combinedPattern := `(?i)(?:^|[\s.\-_\[\]()])(`  + strings.Join(validPatterns, "|") + `)(?:$|[\s.\-_\[\]()])`
+			combinedPattern := `(?i)(?:^|[\s.\-_\[\]()])(` + strings.Join(validPatterns, "|") + `)(?:$|[\s.\-_\[\]()])`
 			excludePattern, _ = regexp.Compile(combinedPattern)
 		}
 	}
@@ -458,7 +458,7 @@ func (s *StreamStore) DeleteAll(ctx context.Context) error {
 
 // DeleteStale removes streams older than the specified number of days
 func (s *StreamStore) DeleteStale(ctx context.Context, days int) error {
-	_, err := s.db.ExecContext(ctx, 
+	_, err := s.db.ExecContext(ctx,
 		"DELETE FROM available_streams WHERE updated_at < NOW() - INTERVAL '1 day' * $1",
 		days)
 	return err

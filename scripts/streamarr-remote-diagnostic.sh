@@ -1,8 +1,8 @@
 #!/bin/bash
-# StreamArr Remote Diagnostic Script
+# Vortexo Server Remote Diagnostic Script
 # Run this on the remote server: bash streamarr-remote-diagnostic.sh
 
-echo "=== StreamArr Remote Server Diagnostic ==="
+echo "=== Vortexo Server Remote Server Diagnostic ==="
 echo ""
 
 # Find docker command
@@ -19,7 +19,7 @@ echo "1. Container Status:"
 $DOCKER_CMD ps | grep -E "streamarr|postgres"
 
 echo ""
-echo "2. Recent StreamArr Logs (last 30 lines):"
+echo "2. Recent Vortexo Server Logs (last 30 lines):"
 $DOCKER_CMD logs streamarr --tail 30 2>&1
 
 echo ""

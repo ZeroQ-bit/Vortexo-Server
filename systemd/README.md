@@ -1,11 +1,11 @@
 # SystemD Service Files
 
-This directory contains systemd service unit files for StreamArr Pro.
+This directory contains systemd service unit files for Vortexo Server.
 
 ## Services
 
 ### streamarr.service
-The main StreamArr Pro API server service.
+The main Vortexo Server API service.
 
 ### streamarr-worker.service
 Background worker service for scheduled tasks:
@@ -48,7 +48,7 @@ sudo systemctl start streamarr-worker.service
 
 Before starting the services, ensure you update the following in the service files:
 
-- `WorkingDirectory`: Path to your StreamArr Pro installation
+- `WorkingDirectory`: Path to your Vortexo Server installation
 - `DATABASE_URL`: Your PostgreSQL connection string
 - `JWT_SECRET`: A secure random secret for JWT token generation
 - `User`: The user that should run the services (default: root)
