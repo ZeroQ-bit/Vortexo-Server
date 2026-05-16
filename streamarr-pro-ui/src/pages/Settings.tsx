@@ -57,8 +57,6 @@ interface SettingsData {
   realdebrid_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
-  subtitle_translation_api_url: string;
-  subtitle_translation_api_key: string;
   user_create_playlist: boolean;
   total_pages: number;
   language: string;
@@ -1820,31 +1818,11 @@ export default function Settings() {
                       </p>
                     </div>
 
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">
-                          Translation API Key
-                        </label>
-                        <input
-                          type="password"
-                          value={settings?.subtitle_translation_api_key || ""}
-                          onChange={(e) =>
-                            updateSetting(
-                              "subtitle_translation_api_key",
-                              e.target.value,
-                            )
-                          }
-                          className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                          placeholder="Optional API key"
-                        />
-                        <p className="text-xs text-slate-500 mt-1">
-                          Paste your hosted translation API key here. The
-                          provider URL is handled by Vortexo Server, and local
-                          deployments can still override it with Docker
-                          environment settings if needed.
-                        </p>
-                      </div>
-                    </div>
+                    <p className="text-xs text-slate-400">
+                      No API key is needed. Vortexo Server uses the bundled local
+                      translator when available. Unsupported languages keep the
+                      original subtitle text.
+                    </p>
                   </div>
                 </div>
               </div>

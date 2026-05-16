@@ -200,6 +200,7 @@ func (h *Handler) VortexoTranslateSubtitle(w http.ResponseWriter, r *http.Reques
 	}
 
 	req.Text = strings.TrimSpace(req.Text)
+	rawTargetLang := req.TargetLang
 	req.SourceLang = normalizeSubtitleLanguage(req.SourceLang, "auto")
 	req.TargetLang = normalizeSubtitleLanguage(req.TargetLang, "")
 	if req.Text == "" || req.TargetLang == "" {
@@ -213,11 +214,15 @@ func (h *Handler) VortexoTranslateSubtitle(w http.ResponseWriter, r *http.Reques
 	}
 
 	if subtitleLanguagesMatch(req.SourceLang, req.TargetLang) {
+		text := req.Text
+		if shouldTransliterateSerbianLatin(rawTargetLang) {
+			text = transliterateSerbianCyrillicToLatin(text)
+		}
 		respondJSON(w, http.StatusOK, vortexoSubtitleTranslateResponse{
-			TranslatedText: req.Text,
+			TranslatedText: text,
 			SourceLang:     req.SourceLang,
 			TargetLang:     req.TargetLang,
-			Translated:     false,
+			Translated:     text != req.Text,
 		})
 		return
 	}
@@ -262,6 +267,16 @@ func (h *Handler) translateSubtitleCue(ctx context.Context, text, sourceLang, ta
 	if baseURL == "" {
 		return "", "", fmt.Errorf("subtitle translation API is not configured")
 	}
+
+	needsLatinSerbian := shouldTransliterateSerbianLatin(targetLang)
+	translated, provider, err := h.translateSubtitleCueWithLibreTranslate(ctx, baseURL, apiKey, text, sourceLang, targetLang)
+	if err == nil && needsLatinSerbian {
+		translated = transliterateSerbianCyrillicToLatin(translated)
+	}
+	return translated, provider, err
+}
+
+func (h *Handler) translateSubtitleCueWithLibreTranslate(ctx context.Context, baseURL, apiKey, text, sourceLang, targetLang string) (string, string, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
@@ -357,6 +372,39 @@ func subtitleLanguagesMatch(sourceLang, targetLang string) bool {
 	return false
 }
 
+func shouldTransliterateSerbianLatin(targetLang string) bool {
+	tokens := subtitleLanguageTokens(targetLang)
+	if len(tokens) == 0 {
+		return false
+	}
+	for _, token := range []string{"sr", "srp", "serbian", "hr", "hrv", "croatian", "bs", "bos", "bosnian"} {
+		if tokens[token] {
+			return true
+		}
+	}
+	return false
+}
+
+func transliterateSerbianCyrillicToLatin(text string) string {
+	replacer := strings.NewReplacer(
+		"Љ", "Lj", "Њ", "Nj", "Џ", "Dž",
+		"љ", "lj", "њ", "nj", "џ", "dž",
+		"А", "A", "Б", "B", "В", "V", "Г", "G", "Д", "D",
+		"Ђ", "Đ", "Е", "E", "Ж", "Ž", "З", "Z", "И", "I",
+		"Ј", "J", "К", "K", "Л", "L", "М", "M", "Н", "N",
+		"О", "O", "П", "P", "Р", "R", "С", "S", "Т", "T",
+		"Ћ", "Ć", "У", "U", "Ф", "F", "Х", "H", "Ц", "C",
+		"Ч", "Č", "Ш", "Š",
+		"а", "a", "б", "b", "в", "v", "г", "g", "д", "d",
+		"ђ", "đ", "е", "e", "ж", "ž", "з", "z", "и", "i",
+		"ј", "j", "к", "k", "л", "l", "м", "m", "н", "n",
+		"о", "o", "п", "p", "р", "r", "с", "s", "т", "t",
+		"ћ", "ć", "у", "u", "ф", "f", "х", "h", "ц", "c",
+		"ч", "č", "ш", "š",
+	)
+	return replacer.Replace(text)
+}
+
 func subtitleLanguageTokens(value string) map[string]bool {
 	value = strings.TrimSpace(strings.ToLower(value))
 	tokens := map[string]bool{}
@@ -401,9 +449,7 @@ func subtitleLanguageAliasGroups() [][]string {
 		{"zh", "zho", "chi", "chinese", "cmn"},
 		{"ar", "ara", "arabic"},
 		{"hi", "hin", "hindi"},
-		{"hr", "hrv", "croatian"},
-		{"sr", "srp", "serbian"},
-		{"bs", "bos", "bosnian"},
+		{"sr", "srp", "serbian", "hr", "hrv", "croatian", "bs", "bos", "bosnian"},
 	}
 }
 
