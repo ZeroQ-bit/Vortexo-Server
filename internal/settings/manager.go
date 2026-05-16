@@ -64,6 +64,10 @@ type Settings struct {
 	MDBListAPIKey    string `json:"mdblist_api_key"`
 	MDBListLists     string `json:"mdblist_lists"`
 
+	// Subtitle Translation
+	SubtitleTranslationAPIURL string `json:"subtitle_translation_api_url"`
+	SubtitleTranslationAPIKey string `json:"subtitle_translation_api_key"`
+
 	// Service URLs
 	CometURL string `json:"comet_url"`
 
@@ -646,6 +650,8 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"realdebrid_token":                    m.settings.RealDebridAPIKey,
 		"premiumize_api_key":                  m.settings.PremiumizeAPIKey,
 		"mdblist_api_key":                     m.settings.MDBListAPIKey,
+		"subtitle_translation_api_url":        m.settings.SubtitleTranslationAPIURL,
+		"subtitle_translation_api_key":        m.settings.SubtitleTranslationAPIKey,
 		"use_realdebrid":                      m.settings.UseRealDebrid,
 		"use_premiumize":                      m.settings.UsePremiumize,
 		"comet_enabled":                       m.settings.CometEnabled,
@@ -706,6 +712,12 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["mdblist_api_key"].(string); ok {
 		m.settings.MDBListAPIKey = v
+	}
+	if v, ok := updates["subtitle_translation_api_url"].(string); ok {
+		m.settings.SubtitleTranslationAPIURL = v
+	}
+	if v, ok := updates["subtitle_translation_api_key"].(string); ok {
+		m.settings.SubtitleTranslationAPIKey = v
 	}
 	if v, ok := updates["use_realdebrid"].(bool); ok {
 		m.settings.UseRealDebrid = v

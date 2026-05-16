@@ -57,6 +57,8 @@ interface SettingsData {
   realdebrid_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
+  subtitle_translation_api_url: string;
+  subtitle_translation_api_key: string;
   user_create_playlist: boolean;
   total_pages: number;
   language: string;
@@ -1804,6 +1806,45 @@ export default function Settings() {
                         mdblist.com/preferences
                       </a>
                     </p>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
+                    <div className="mb-4">
+                      <h4 className="text-sm font-medium text-white">
+                        Subtitle Translation
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Used by the Apple TV app when embedded subtitle
+                        translation is enabled. The app keeps using your
+                        configured Vortexo Server URL automatically.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                          Translation API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={settings?.subtitle_translation_api_key || ""}
+                          onChange={(e) =>
+                            updateSetting(
+                              "subtitle_translation_api_key",
+                              e.target.value,
+                            )
+                          }
+                          className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                          placeholder="Optional API key"
+                        />
+                        <p className="text-xs text-slate-500 mt-1">
+                          Paste your hosted translation API key here. The
+                          provider URL is handled by Vortexo Server, and local
+                          deployments can still override it with Docker
+                          environment settings if needed.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

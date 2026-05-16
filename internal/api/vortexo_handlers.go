@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -50,13 +52,41 @@ type vortexoPlayToken struct {
 	Title string `json:"title,omitempty"`
 }
 
+type vortexoSubtitleTranslateRequest struct {
+	Text       string `json:"text"`
+	SourceLang string `json:"source_lang,omitempty"`
+	TargetLang string `json:"target_lang"`
+}
+
+type vortexoSubtitleTranslateResponse struct {
+	TranslatedText string `json:"translated_text"`
+	SourceLang     string `json:"source_lang,omitempty"`
+	TargetLang     string `json:"target_lang"`
+	Provider       string `json:"provider,omitempty"`
+	Translated     bool   `json:"translated"`
+}
+
+type libreTranslateRequest struct {
+	Text       string `json:"q"`
+	SourceLang string `json:"source"`
+	TargetLang string `json:"target"`
+	Format     string `json:"format"`
+	APIKey     string `json:"api_key,omitempty"`
+}
+
+type libreTranslateResponse struct {
+	TranslatedText string `json:"translatedText"`
+}
+
 // VortexoCapabilities exposes a tiny discovery endpoint for private clients.
 func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"name":       "Vortexo Server Sources",
-		"source_api": true,
-		"playback":   true,
-		"types":      []string{"movie", "episode"},
+		"name":                          "Vortexo Server Sources",
+		"source_api":                    true,
+		"playback":                      true,
+		"subtitle_translation":          true,
+		"subtitle_translation_provider": h.configuredSubtitleTranslationProvider(),
+		"types":                         []string{"movie", "episode"},
 	})
 }
 
@@ -157,6 +187,224 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, streamURL, http.StatusFound)
+}
+
+// VortexoTranslateSubtitle translates short embedded subtitle cues through the
+// user's configured server-side translation provider. If no provider is
+// configured, the original text is returned so clients can safely fall back.
+func (h *Handler) VortexoTranslateSubtitle(w http.ResponseWriter, r *http.Request) {
+	var req vortexoSubtitleTranslateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Text = strings.TrimSpace(req.Text)
+	req.SourceLang = normalizeSubtitleLanguage(req.SourceLang, "auto")
+	req.TargetLang = normalizeSubtitleLanguage(req.TargetLang, "")
+	if req.Text == "" || req.TargetLang == "" {
+		respondError(w, http.StatusBadRequest, "text and target_lang are required")
+		return
+	}
+
+	if len([]rune(req.Text)) > 2000 {
+		respondError(w, http.StatusBadRequest, "subtitle cue is too long")
+		return
+	}
+
+	if subtitleLanguagesMatch(req.SourceLang, req.TargetLang) {
+		respondJSON(w, http.StatusOK, vortexoSubtitleTranslateResponse{
+			TranslatedText: req.Text,
+			SourceLang:     req.SourceLang,
+			TargetLang:     req.TargetLang,
+			Translated:     false,
+		})
+		return
+	}
+
+	translated, provider, err := h.translateSubtitleCue(r.Context(), req.Text, req.SourceLang, req.TargetLang)
+	if err != nil {
+		log.Printf("[Vortexo] Subtitle translation unavailable target=%s provider=%s: %v", req.TargetLang, provider, err)
+		respondJSON(w, http.StatusOK, vortexoSubtitleTranslateResponse{
+			TranslatedText: req.Text,
+			SourceLang:     req.SourceLang,
+			TargetLang:     req.TargetLang,
+			Provider:       provider,
+			Translated:     false,
+		})
+		return
+	}
+
+	translated = strings.TrimSpace(translated)
+	if translated == "" {
+		translated = req.Text
+	}
+
+	respondJSON(w, http.StatusOK, vortexoSubtitleTranslateResponse{
+		TranslatedText: translated,
+		SourceLang:     req.SourceLang,
+		TargetLang:     req.TargetLang,
+		Provider:       provider,
+		Translated:     translated != req.Text,
+	})
+}
+
+func (h *Handler) configuredSubtitleTranslationProvider() string {
+	baseURL, _ := h.subtitleTranslationConfig()
+	if baseURL != "" {
+		return "libretranslate"
+	}
+	return ""
+}
+
+func (h *Handler) translateSubtitleCue(ctx context.Context, text, sourceLang, targetLang string) (string, string, error) {
+	baseURL, apiKey := h.subtitleTranslationConfig()
+	if baseURL == "" {
+		return "", "", fmt.Errorf("subtitle translation API is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+
+	payload := libreTranslateRequest{
+		Text:       text,
+		SourceLang: normalizeSubtitleLanguage(sourceLang, "auto"),
+		TargetLang: normalizeSubtitleLanguage(targetLang, ""),
+		Format:     "text",
+		APIKey:     apiKey,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", "libretranslate", err
+	}
+
+	endpoint := strings.TrimRight(baseURL, "/") + "/translate"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", "libretranslate", err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", "libretranslate", err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", "libretranslate", fmt.Errorf("translation provider returned HTTP %d", response.StatusCode)
+	}
+
+	var decoded libreTranslateResponse
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		return "", "libretranslate", err
+	}
+
+	return decoded.TranslatedText, "libretranslate", nil
+}
+
+func (h *Handler) subtitleTranslationConfig() (string, string) {
+	var settingsURL string
+	var settingsKey string
+	if h != nil && h.settingsManager != nil {
+		cfg := h.settingsManager.Get()
+		settingsURL = cfg.SubtitleTranslationAPIURL
+		settingsKey = cfg.SubtitleTranslationAPIKey
+	}
+
+	apiKey := strings.TrimSpace(firstNonEmpty(settingsKey, os.Getenv("LIBRETRANSLATE_API_KEY")))
+	baseURL := strings.TrimSpace(firstNonEmpty(settingsURL, os.Getenv("LIBRETRANSLATE_URL"), os.Getenv("VORTEXO_TRANSLATE_URL")))
+	if baseURL == "" && apiKey != "" {
+		baseURL = "https://libretranslate.com"
+	}
+
+	return baseURL, apiKey
+}
+
+func normalizeSubtitleLanguage(value, fallback string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || value == "unknown" || value == "und" {
+		return fallback
+	}
+
+	for _, group := range subtitleLanguageAliasGroups() {
+		for _, alias := range group {
+			if value == alias {
+				return group[0]
+			}
+		}
+	}
+
+	return value
+}
+
+func subtitleLanguagesMatch(sourceLang, targetLang string) bool {
+	sourceLang = normalizeSubtitleLanguage(sourceLang, "")
+	targetLang = normalizeSubtitleLanguage(targetLang, "")
+	if sourceLang == "" || sourceLang == "auto" || targetLang == "" {
+		return false
+	}
+
+	sourceTokens := subtitleLanguageTokens(sourceLang)
+	targetTokens := subtitleLanguageTokens(targetLang)
+	for token := range sourceTokens {
+		if targetTokens[token] {
+			return true
+		}
+	}
+	return false
+}
+
+func subtitleLanguageTokens(value string) map[string]bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	tokens := map[string]bool{}
+	if value == "" {
+		return tokens
+	}
+
+	for _, token := range strings.FieldsFunc(value, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	}) {
+		if token != "" {
+			tokens[token] = true
+		}
+	}
+	tokens[value] = true
+
+	for _, group := range subtitleLanguageAliasGroups() {
+		for _, alias := range group {
+			if tokens[alias] {
+				for _, expanded := range group {
+					tokens[expanded] = true
+				}
+				break
+			}
+		}
+	}
+
+	return tokens
+}
+
+func subtitleLanguageAliasGroups() [][]string {
+	return [][]string{
+		{"en", "eng", "english", "en-us", "en-gb"},
+		{"es", "spa", "spanish", "es-es", "es-419"},
+		{"fr", "fra", "fre", "french"},
+		{"de", "deu", "ger", "german"},
+		{"it", "ita", "italian"},
+		{"pt", "por", "portuguese", "pt-br", "pt-pt"},
+		{"ru", "rus", "russian"},
+		{"ja", "jpn", "japanese"},
+		{"ko", "kor", "korean"},
+		{"zh", "zho", "chi", "chinese", "cmn"},
+		{"ar", "ara", "arabic"},
+		{"hi", "hin", "hindi"},
+		{"hr", "hrv", "croatian"},
+		{"sr", "srp", "serbian"},
+		{"bs", "bos", "bosnian"},
+	}
 }
 
 func (h *Handler) resolveVortexoIMDBID(ctx context.Context, req vortexoSourcesRequest) (string, int, error) {
