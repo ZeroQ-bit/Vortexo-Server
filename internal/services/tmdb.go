@@ -377,6 +377,7 @@ func (c *TMDBClient) GetSeries(ctx context.Context, tmdbID int) (*models.Series,
 	// Fetch external IDs to get IMDB ID
 	externalIDs, err := c.GetSeriesExternalIDs(ctx, tmdbID)
 	if err == nil && externalIDs.IMDBID != "" {
+		series.IMDBID = externalIDs.IMDBID
 		series.Metadata["imdb_id"] = externalIDs.IMDBID
 	}
 

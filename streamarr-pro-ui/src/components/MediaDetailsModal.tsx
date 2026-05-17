@@ -1,8 +1,8 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { streamarrApi, tmdbImageUrl } from '../services/api';
-import { ArrowLeft, Star, Calendar, Plus, Check, Loader2, Film, Tv, Play } from 'lucide-react';
-import type { SearchResult } from '../types';
+import { ArrowLeft, Star, Calendar, Plus, Check, Loader2, Film, Tv, Play, ChevronDown } from 'lucide-react';
+import type { Episode, SearchResult, Series } from '../types';
 import type { TrendingItem } from '../services/api';
 
 interface MediaDetailsModalProps {
@@ -24,6 +24,7 @@ export default function MediaDetailsModal({
 }: MediaDetailsModalProps) {
   const isMovie = mediaType === 'movie';
   const tmdbId = ('tmdb_id' in item && item.tmdb_id) ? item.tmdb_id : item.id;
+  const [selectedSeason, setSelectedSeason] = useState<number | null>(null);
 
   // Fetch full details from backend (which calls TMDB)
   const { data: details, isLoading } = useQuery({
@@ -34,6 +35,59 @@ export default function MediaDetailsModal({
     },
     enabled: !!tmdbId,
   });
+
+  const { data: librarySeries = [] } = useQuery<Series[]>({
+    queryKey: ['series', 'all'],
+    queryFn: async () => {
+      const response = await streamarrApi.getSeries({ limit: 10000 });
+      return Array.isArray(response.data) ? response.data : [];
+    },
+    enabled: !isMovie && isAdded,
+  });
+
+  const librarySeriesItem = useMemo(() => {
+    if (isMovie || !isAdded) return null;
+    return librarySeries.find(series => series.tmdb_id === tmdbId) || null;
+  }, [isAdded, isMovie, librarySeries, tmdbId]);
+
+  const { data: episodes = [], isLoading: episodesLoading } = useQuery<Episode[]>({
+    queryKey: ['episodes', librarySeriesItem?.id],
+    queryFn: async () => {
+      if (!librarySeriesItem) return [];
+      const response = await streamarrApi.getEpisodes(librarySeriesItem.id);
+      return Array.isArray(response.data) ? response.data : [];
+    },
+    enabled: !!librarySeriesItem,
+  });
+
+  const episodesBySeason = useMemo(() => {
+    const grouped: Record<number, Episode[]> = {};
+    episodes.forEach((episode) => {
+      if (!grouped[episode.season_number]) {
+        grouped[episode.season_number] = [];
+      }
+      grouped[episode.season_number].push(episode);
+    });
+    Object.values(grouped).forEach((seasonEpisodes) =>
+      seasonEpisodes.sort((a, b) => a.episode_number - b.episode_number)
+    );
+    return grouped;
+  }, [episodes]);
+
+  const episodeSeasons = useMemo(
+    () => Object.keys(episodesBySeason).map(Number).sort((a, b) => a - b),
+    [episodesBySeason]
+  );
+
+  useEffect(() => {
+    if (episodeSeasons.length === 0) {
+      setSelectedSeason(null);
+      return;
+    }
+    if (selectedSeason == null || !episodeSeasons.includes(selectedSeason)) {
+      setSelectedSeason(episodeSeasons[0]);
+    }
+  }, [episodeSeasons, selectedSeason]);
 
   // Close on escape
   useEffect(() => {
@@ -50,7 +104,10 @@ export default function MediaDetailsModal({
   const posterPath = item.poster_path || details?.poster_path;
   const year = item.release_date?.substring(0, 4) || item.first_air_date?.substring(0, 4) || details?.release_date?.substring(0, 4) || details?.first_air_date?.substring(0, 4);
   const rating = item.vote_average || details?.vote_average;
-  const genres = details?.genres?.map((g: any) => g.name).join(', ') || '';
+  const genres = details?.genres
+    ?.map((genre: any) => typeof genre === 'string' ? genre : genre?.name)
+    .filter(Boolean)
+    .join(', ') || '';
   const runtime = details?.runtime;
   const seasons = details?.number_of_seasons;
 
@@ -203,6 +260,55 @@ export default function MediaDetailsModal({
                 <div>
                   <h3 className="text-lg font-semibold text-white mb-3">Genres</h3>
                   <p className="text-slate-300">{genres}</p>
+                </div>
+              )}
+
+              {!isMovie && isAdded && (
+                <div>
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
+                    <h3 className="text-lg font-semibold text-white">Episodes</h3>
+                    {episodeSeasons.length > 0 && selectedSeason != null && (
+                      <div className="relative">
+                        <select
+                          value={selectedSeason}
+                          onChange={(event) => setSelectedSeason(Number(event.target.value))}
+                          className="appearance-none bg-[#242424] text-white px-4 py-2 pr-10 rounded border border-gray-600 hover:border-gray-400 transition-colors cursor-pointer font-medium"
+                        >
+                          {episodeSeasons.map((season) => (
+                            <option key={season} value={season}>Season {season}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                      </div>
+                    )}
+                  </div>
+
+                  {episodesLoading ? (
+                    <div className="flex items-center justify-center py-10">
+                      <Loader2 className="w-8 h-8 animate-spin text-red-600" />
+                    </div>
+                  ) : episodes.length === 0 ? (
+                    <div className="text-slate-400 py-6">No episodes found</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(episodesBySeason[selectedSeason || episodeSeasons[0]] || []).map((episode) => (
+                        <div key={episode.id} className="rounded-lg bg-white/5 border border-white/10 p-4">
+                          <div className="flex items-center gap-3 text-white">
+                            <span className="text-slate-400 font-mono text-sm">
+                              S{String(episode.season_number).padStart(2, '0')}E{String(episode.episode_number).padStart(2, '0')}
+                            </span>
+                            <span className="font-semibold">{episode.title || `Episode ${episode.episode_number}`}</span>
+                            {episode.air_date && (
+                              <span className="text-slate-500 text-sm">{new Date(episode.air_date).getFullYear()}</span>
+                            )}
+                          </div>
+                          {episode.overview && (
+                            <p className="text-slate-400 text-sm mt-2 line-clamp-2">{episode.overview}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

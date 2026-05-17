@@ -118,6 +118,8 @@ func scanSeries(scanner seriesRowScanner) (*models.Series, error) {
 	if imdbID.Valid && imdbID.String != "" {
 		series.IMDBID = imdbID.String
 		series.Metadata["imdb_id"] = imdbID.String
+	} else if value, ok := series.Metadata["imdb_id"].(string); ok {
+		series.IMDBID = value
 	}
 	if year.Valid {
 		series.Year = int(year.Int32)

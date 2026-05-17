@@ -730,6 +730,55 @@ func (h *Handler) scanEpisodesForAllSeries(ctx context.Context) error {
 	return nil
 }
 
+// ensureEpisodesForSeries hydrates a single series with TMDB episode rows.
+// Adding a series should make it usable immediately instead of waiting for the daily scan.
+func (h *Handler) ensureEpisodesForSeries(ctx context.Context, series *models.Series) (int, error) {
+	if series == nil {
+		return 0, nil
+	}
+	if h.episodeStore == nil || h.tmdbClient == nil {
+		return 0, fmt.Errorf("episode store or TMDB client not initialized")
+	}
+
+	existing, err := h.episodeStore.ListBySeries(ctx, series.ID)
+	if err == nil && len(existing) > 0 {
+		return len(existing), nil
+	}
+	if err != nil {
+		log.Printf("[Episode Hydrate] Existing episode lookup failed for %s (%d): %v", series.Title, series.ID, err)
+	}
+
+	seasons := series.Seasons
+	if seasons <= 0 {
+		tmdbSeries, err := h.tmdbClient.GetSeries(ctx, series.TMDBID)
+		if err != nil {
+			return 0, fmt.Errorf("failed to refresh series details: %w", err)
+		}
+		seasons = tmdbSeries.Seasons
+	}
+	if seasons <= 0 {
+		return 0, nil
+	}
+
+	episodes, err := h.tmdbClient.GetEpisodes(ctx, series.ID, series.TMDBID, seasons)
+	if err != nil {
+		return 0, fmt.Errorf("failed to fetch episodes: %w", err)
+	}
+	for _, ep := range episodes {
+		ep.SeriesID = series.ID
+		ep.Monitored = series.Monitored
+	}
+	if len(episodes) == 0 {
+		return 0, nil
+	}
+	if err := h.episodeStore.AddBatch(ctx, episodes); err != nil {
+		return 0, fmt.Errorf("failed to add episodes: %w", err)
+	}
+
+	log.Printf("[Episode Hydrate] Added %d episodes for %s (%d)", len(episodes), series.Title, series.ID)
+	return len(episodes), nil
+}
+
 // containsDuplicateError checks if an error message indicates a duplicate key violation
 func containsDuplicateError(errMsg string) bool {
 	return strings.Contains(errMsg, "duplicate key") || strings.Contains(errMsg, "UNIQUE constraint")
@@ -1615,6 +1664,11 @@ func (h *Handler) AddSeries(w http.ResponseWriter, r *http.Request) {
 	// Check if series already exists in library
 	existingSeries, err := h.seriesStore.GetByTMDBID(ctx, int(req.TMDBID))
 	if err == nil && existingSeries != nil {
+		if count, hydrateErr := h.ensureEpisodesForSeries(ctx, existingSeries); hydrateErr != nil {
+			log.Printf("[Episode Hydrate] Failed for existing series %s (%d): %v", existingSeries.Title, existingSeries.ID, hydrateErr)
+		} else {
+			log.Printf("[Episode Hydrate] Existing series %s (%d) has %d episodes", existingSeries.Title, existingSeries.ID, count)
+		}
 		respondJSON(w, http.StatusOK, existingSeries)
 		return
 	}
@@ -1642,6 +1696,12 @@ func (h *Handler) AddSeries(w http.ResponseWriter, r *http.Request) {
 	if err := h.seriesStore.Add(ctx, series); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add series: %v", err))
 		return
+	}
+
+	if count, hydrateErr := h.ensureEpisodesForSeries(ctx, series); hydrateErr != nil {
+		log.Printf("[Episode Hydrate] Failed for new series %s (%d): %v", series.Title, series.ID, hydrateErr)
+	} else {
+		log.Printf("[Episode Hydrate] New series %s (%d) has %d episodes", series.Title, series.ID, count)
 	}
 
 	respondJSON(w, http.StatusCreated, series)

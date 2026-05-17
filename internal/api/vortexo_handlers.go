@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 	streammeta "github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 	"github.com/gorilla/mux"
 )
@@ -454,35 +456,16 @@ func subtitleLanguageAliasGroups() [][]string {
 }
 
 func (h *Handler) resolveVortexoIMDBID(ctx context.Context, req vortexoSourcesRequest) (string, int, error) {
+	if req.Type == "episode" {
+		return h.resolveVortexoSeriesIMDBID(ctx, req)
+	}
+
 	if strings.HasPrefix(req.IMDBID, "tt") {
 		return req.IMDBID, req.Year, nil
 	}
 
 	if req.TMDBID <= 0 {
 		return "", 0, fmt.Errorf("missing tmdb_id or imdb_id")
-	}
-
-	if req.Type == "episode" {
-		if req.Season <= 0 || req.Episode <= 0 {
-			return "", 0, fmt.Errorf("missing season/episode")
-		}
-		if h.seriesStore != nil {
-			if series, err := h.seriesStore.GetByTMDBID(ctx, req.TMDBID); err == nil && series != nil {
-				if strings.HasPrefix(series.IMDBID, "tt") {
-					return series.IMDBID, series.Year, nil
-				}
-				if imdbID, ok := series.Metadata["imdb_id"].(string); ok && strings.HasPrefix(imdbID, "tt") {
-					return imdbID, series.Year, nil
-				}
-			}
-		}
-		if h.tmdbClient != nil {
-			externalIDs, err := h.tmdbClient.GetSeriesExternalIDs(ctx, req.TMDBID)
-			if err == nil && strings.HasPrefix(externalIDs.IMDBID, "tt") {
-				return externalIDs.IMDBID, req.Year, nil
-			}
-		}
-		return "", 0, fmt.Errorf("series imdb id not found")
 	}
 
 	if h.movieStore != nil {
@@ -510,6 +493,162 @@ func (h *Handler) resolveVortexoIMDBID(ctx context.Context, req vortexoSourcesRe
 	}
 
 	return "", 0, fmt.Errorf("movie imdb id not found")
+}
+
+func (h *Handler) resolveVortexoSeriesIMDBID(ctx context.Context, req vortexoSourcesRequest) (string, int, error) {
+	if req.Season <= 0 || req.Episode <= 0 {
+		return "", 0, fmt.Errorf("missing season/episode")
+	}
+
+	if req.TMDBID > 0 {
+		if imdbID, year, ok := h.resolveVortexoSeriesByTMDBID(ctx, req.TMDBID, req.Year); ok {
+			return imdbID, year, nil
+		}
+	}
+
+	if imdbID := strings.TrimSpace(req.IMDBID); strings.HasPrefix(imdbID, "tt") {
+		if h.tmdbClient != nil {
+			if tmdbID, err := h.tmdbClient.IMDBToTMDB(imdbID, "tv"); err == nil && tmdbID > 0 {
+				if resolvedIMDBID, year, ok := h.resolveVortexoSeriesByTMDBID(ctx, tmdbID, req.Year); ok {
+					return resolvedIMDBID, year, nil
+				}
+			}
+		}
+	}
+
+	searchTitle := firstNonEmpty(req.ParentTitle, req.Title)
+	if imdbID, year, ok := h.resolveVortexoSeriesBySearch(ctx, searchTitle, req.Year); ok {
+		return imdbID, year, nil
+	}
+
+	if imdbID := strings.TrimSpace(req.IMDBID); strings.HasPrefix(imdbID, "tt") {
+		return imdbID, req.Year, nil
+	}
+
+	return "", 0, fmt.Errorf("series imdb id not found")
+}
+
+func (h *Handler) resolveVortexoSeriesByTMDBID(ctx context.Context, tmdbID int, fallbackYear int) (string, int, bool) {
+	if tmdbID <= 0 {
+		return "", 0, false
+	}
+
+	if h.seriesStore != nil {
+		if series, err := h.seriesStore.GetByTMDBID(ctx, tmdbID); err == nil && series != nil {
+			year := firstNonZero(services.SeriesReleaseYear(series), fallbackYear)
+			if strings.HasPrefix(series.IMDBID, "tt") {
+				return series.IMDBID, year, true
+			}
+			if imdbID, ok := series.Metadata["imdb_id"].(string); ok && strings.HasPrefix(imdbID, "tt") {
+				return imdbID, year, true
+			}
+		}
+	}
+
+	if h.tmdbClient != nil {
+		externalIDs, err := h.tmdbClient.GetSeriesExternalIDs(ctx, tmdbID)
+		if err == nil && strings.HasPrefix(externalIDs.IMDBID, "tt") {
+			return externalIDs.IMDBID, fallbackYear, true
+		}
+	}
+
+	return "", 0, false
+}
+
+func (h *Handler) resolveVortexoSeriesBySearch(ctx context.Context, title string, year int) (string, int, bool) {
+	if h.tmdbClient == nil {
+		return "", 0, false
+	}
+
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", 0, false
+	}
+
+	results, err := h.tmdbClient.SearchSeries(ctx, title, 1)
+	if err != nil || len(results) == 0 {
+		return "", 0, false
+	}
+
+	if match := bestVortexoSeriesMatch(results, title, year); match != nil {
+		matchYear := firstNonZero(services.SeriesReleaseYear(match), year)
+		if imdbID, resolvedYear, ok := h.resolveVortexoSeriesByTMDBID(ctx, match.TMDBID, matchYear); ok {
+			return imdbID, firstNonZero(resolvedYear, matchYear), true
+		}
+	}
+
+	return "", 0, false
+}
+
+func bestVortexoSeriesMatch(results []*models.Series, title string, year int) *models.Series {
+	normalizedTitle := normalizeVortexoLookupTitle(title)
+	var best *models.Series
+	bestScore := -1
+
+	for _, candidate := range results {
+		if candidate == nil {
+			continue
+		}
+
+		candidateTitle := normalizeVortexoLookupTitle(candidate.Title)
+		candidateOriginalTitle := normalizeVortexoLookupTitle(candidate.OriginalTitle)
+		score := 0
+
+		if candidateTitle == normalizedTitle || candidateOriginalTitle == normalizedTitle {
+			score += 100
+		} else if normalizedTitle != "" && (strings.Contains(candidateTitle, normalizedTitle) || strings.Contains(normalizedTitle, candidateTitle)) {
+			score += 50
+		}
+
+		if year > 0 {
+			candidateYear := services.SeriesReleaseYear(candidate)
+			switch delta := absInt(candidateYear - year); {
+			case candidateYear == 0:
+			case delta == 0:
+				score += 30
+			case delta == 1:
+				score += 10
+			default:
+				score -= 20
+			}
+		}
+
+		if score > bestScore {
+			best = candidate
+			bestScore = score
+		}
+	}
+
+	return best
+}
+
+func normalizeVortexoLookupTitle(value string) string {
+	replacer := strings.NewReplacer(
+		"&", " and ",
+		":", " ",
+		"-", " ",
+		"_", " ",
+		"'", "",
+		"\"", "",
+		".", " ",
+	)
+	return strings.Join(strings.Fields(strings.ToLower(replacer.Replace(strings.TrimSpace(value)))), " ")
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream) []vortexoSource {
