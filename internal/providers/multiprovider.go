@@ -347,6 +347,7 @@ func (mp *MultiProvider) GetSeriesStreams(imdbID string, season, episode int) ([
 	}
 
 	allStreams = mp.filterExcludedQualityTypes(allStreams)
+	allStreams = filterSeriesStreamsByEpisode(allStreams, season, episode)
 
 	if len(allStreams) == 0 && lastErr != nil {
 		return nil, fmt.Errorf("all providers failed, last error: %w", lastErr)
@@ -596,6 +597,73 @@ func filterMovieStreams(streams []TorrentioStream) []TorrentioStream {
 	}
 
 	return filtered
+}
+
+var streamEpisodeNumberPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(?:^|[^A-Z0-9])S0*(\d{1,3})[\s._-]*E0*(\d{1,3})(?:[^0-9]|$)`),
+	regexp.MustCompile(`(?i)(?:^|[^A-Z0-9])0*(\d{1,3})x0*(\d{1,3})(?:[^0-9]|$)`),
+	regexp.MustCompile(`(?i)(?:^|[^A-Z0-9])season[\s._-]*0*(\d{1,3}).{0,40}episode[\s._-]*0*(\d{1,3})(?:[^0-9]|$)`),
+}
+
+func filterSeriesStreamsByEpisode(streams []TorrentioStream, season, episode int) []TorrentioStream {
+	if season <= 0 || episode <= 0 || len(streams) == 0 {
+		return streams
+	}
+
+	filtered := make([]TorrentioStream, 0, len(streams))
+	mismatched := 0
+	unparseable := 0
+
+	for _, stream := range streams {
+		streamSeason, streamEpisode, ok := parseStreamEpisodeNumber(stream)
+		if !ok {
+			unparseable++
+			continue
+		}
+		if streamSeason == season && streamEpisode == episode {
+			filtered = append(filtered, stream)
+			continue
+		}
+		mismatched++
+	}
+
+	if len(filtered) != len(streams) {
+		log.Printf("[EPISODE-FILTER] Filtered %d -> %d streams for S%02dE%02d (removed %d mismatched, %d unparseable)",
+			len(streams), len(filtered), season, episode, mismatched, unparseable)
+	}
+
+	return filtered
+}
+
+func parseStreamEpisodeNumber(stream TorrentioStream) (int, int, bool) {
+	return parseEpisodeNumberFromText(strings.Join([]string{
+		stream.Title,
+		stream.Name,
+		stream.BehaviorHints.Filename,
+		stream.Source,
+	}, " "))
+}
+
+func parseEpisodeNumberFromText(text string) (int, int, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0, 0, false
+	}
+
+	for _, pattern := range streamEpisodeNumberPatterns {
+		match := pattern.FindStringSubmatch(text)
+		if len(match) < 3 {
+			continue
+		}
+
+		season, seasonErr := strconv.Atoi(match[1])
+		episode, episodeErr := strconv.Atoi(match[2])
+		if seasonErr == nil && episodeErr == nil && season > 0 && episode > 0 {
+			return season, episode, true
+		}
+	}
+
+	return 0, 0, false
 }
 
 // isEpisodeStream checks if a stream appears to be from a TV series episode

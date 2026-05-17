@@ -126,6 +126,7 @@ func (d *DMMDirectProvider) GetSeriesStreams(imdbID string, season, episode int)
 		log.Printf("[DMM API] Error querying DMM for series %s S%d: %v", imdbID, season, err)
 		return nil, err
 	}
+	results = filterSeriesStreamsByEpisode(results, season, episode)
 
 	log.Printf("[DMM API] Found %d streams for series %s S%dE%d", len(results), imdbID, season, episode)
 

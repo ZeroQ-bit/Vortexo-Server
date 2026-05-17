@@ -45,6 +45,8 @@ type vortexoSource struct {
 	Seeders      int     `json:"seeders,omitempty"`
 	SizeGB       float64 `json:"size_gb,omitempty"`
 	FileName     string  `json:"file_name,omitempty"`
+	Season       int     `json:"season,omitempty"`
+	Episode      int     `json:"episode,omitempty"`
 	PlayURL      string  `json:"play_url"`
 }
 
@@ -145,7 +147,7 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sources := h.buildVortexoSources(providerStreams)
+	sources := h.buildVortexoSources(providerStreams, req)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"matched":   true,
 		"available": len(sources) > 0,
@@ -651,7 +653,7 @@ func absInt(value int) int {
 	return value
 }
 
-func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream) []vortexoSource {
+func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream, req vortexoSourcesRequest) []vortexoSource {
 	sources := make([]vortexoSource, 0, len(providerStreams))
 	for _, stream := range providerStreams {
 		hash := stream.InfoHash
@@ -685,7 +687,7 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			sizeGB = 0
 		}
 
-		sources = append(sources, vortexoSource{
+		source := vortexoSource{
 			ID:           id,
 			Label:        label,
 			Title:        stream.Name,
@@ -700,7 +702,13 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			SizeGB:       sizeGB,
 			FileName:     stream.Title,
 			PlayURL:      "/api/v1/vortexo/play/" + id,
-		})
+		}
+		if req.Type == "episode" {
+			source.Season = req.Season
+			source.Episode = req.Episode
+		}
+
+		sources = append(sources, source)
 	}
 
 	return sources

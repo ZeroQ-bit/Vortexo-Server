@@ -90,3 +90,44 @@ func TestGetBestStreamAppliesMaxResolution(t *testing.T) {
 		t.Fatalf("expected max resolution filter to select 1080p, got %#v", stream)
 	}
 }
+
+func TestFilterSeriesStreamsByEpisodeKeepsExactEpisodeOnly(t *testing.T) {
+	streams := []TorrentioStream{
+		{Title: "Historys.Greatest.Mysteries.S07E03.1080p.WEB.h264-EDITH"},
+		{Title: "Historys.Greatest.Mysteries.S07E13.1080p.WEB.h264-EDITH"},
+		{Title: "Historys Greatest Mysteries 7x03 720p WEB"},
+		{Title: "Historys Greatest Mysteries Season 7 Episode 3 1080p"},
+		{Title: "Historys Greatest Mysteries Season 7 Episode 30 1080p"},
+		{Title: "Historys Greatest Mysteries Season 7 Pack 1080p"},
+	}
+
+	got := filterSeriesStreamsByEpisode(streams, 7, 3)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 exact episode streams, got %d: %#v", len(got), got)
+	}
+	for _, stream := range got {
+		season, episode, ok := parseStreamEpisodeNumber(stream)
+		if !ok || season != 7 || episode != 3 {
+			t.Fatalf("expected exact S07E03 stream, got season=%d episode=%d ok=%v stream=%#v", season, episode, ok, stream)
+		}
+	}
+}
+
+func TestGetSeriesStreamsFiltersProviderSeasonResults(t *testing.T) {
+	mp := &MultiProvider{
+		Providers: []StreamProvider{fakeStreamProvider{seriesStreams: []TorrentioStream{
+			{Title: "Show.S01E01.1080p.WEB-DL", Quality: "1080p"},
+			{Title: "Show.S01E02.1080p.WEB-DL", Quality: "1080p"},
+			{Title: "Show.S01E10.1080p.WEB-DL", Quality: "1080p"},
+		}}},
+		ProviderNames: []string{"fake"},
+	}
+
+	streams, err := mp.GetSeriesStreams("tt123", 1, 1)
+	if err != nil {
+		t.Fatalf("expected filtered series streams, got error: %v", err)
+	}
+	if len(streams) != 1 || streams[0].Title != "Show.S01E01.1080p.WEB-DL" {
+		t.Fatalf("expected only S01E01 stream, got %#v", streams)
+	}
+}
