@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { streamarrApi, tmdbImageUrl } from '../services/api';
 import { ArrowLeft, Star, Calendar, Plus, Check, Loader2, Film, Tv, Play, ChevronDown } from 'lucide-react';
-import type { Episode, SearchResult, Series } from '../types';
+import type { Episode, SearchResult, Series, Stream } from '../types';
 import type { TrendingItem } from '../services/api';
 
 interface MediaDetailsModalProps {
@@ -59,6 +59,23 @@ export default function MediaDetailsModal({
     },
     enabled: !!librarySeriesItem,
   });
+
+  const seriesImdbId = useMemo(() => {
+    if (!librarySeriesItem) return null;
+    const metadataImdbId = librarySeriesItem.metadata?.imdb_id;
+    if (typeof librarySeriesItem.imdb_id === 'string' && librarySeriesItem.imdb_id) {
+      return librarySeriesItem.imdb_id;
+    }
+    if (typeof metadataImdbId === 'string' && metadataImdbId) {
+      return metadataImdbId;
+    }
+    const episodeMetadataImdbId = episodes.find((episode) =>
+      typeof episode.metadata?.series_imdb_id === 'string'
+    )?.metadata?.series_imdb_id;
+    return typeof episodeMetadataImdbId === 'string' && episodeMetadataImdbId
+      ? episodeMetadataImdbId
+      : null;
+  }, [episodes, librarySeriesItem]);
 
   const episodesBySeason = useMemo(() => {
     const grouped: Record<number, Episode[]> = {};
@@ -292,20 +309,11 @@ export default function MediaDetailsModal({
                   ) : (
                     <div className="space-y-2">
                       {(episodesBySeason[selectedSeason || episodeSeasons[0]] || []).map((episode) => (
-                        <div key={episode.id} className="rounded-lg bg-white/5 border border-white/10 p-4">
-                          <div className="flex items-center gap-3 text-white">
-                            <span className="text-slate-400 font-mono text-sm">
-                              S{String(episode.season_number).padStart(2, '0')}E{String(episode.episode_number).padStart(2, '0')}
-                            </span>
-                            <span className="font-semibold">{episode.title || `Episode ${episode.episode_number}`}</span>
-                            {episode.air_date && (
-                              <span className="text-slate-500 text-sm">{new Date(episode.air_date).getFullYear()}</span>
-                            )}
-                          </div>
-                          {episode.overview && (
-                            <p className="text-slate-400 text-sm mt-2 line-clamp-2">{episode.overview}</p>
-                          )}
-                        </div>
+                        <SearchEpisodeCard
+                          key={episode.id}
+                          episode={episode}
+                          seriesImdbId={seriesImdbId}
+                        />
                       ))}
                     </div>
                   )}
@@ -343,6 +351,114 @@ export default function MediaDetailsModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SearchEpisodeCard({ episode, seriesImdbId }: { episode: Episode; seriesImdbId: string | null }) {
+  const [showStreams, setShowStreams] = useState(false);
+
+  const { data: streams = [], isLoading: streamsLoading, refetch } = useQuery<Stream[]>({
+    queryKey: ['search-episode-streams', seriesImdbId, episode.season_number, episode.episode_number],
+    queryFn: async () => {
+      if (!seriesImdbId) return [];
+      const response = await streamarrApi.getEpisodeStreams(
+        seriesImdbId,
+        episode.season_number,
+        episode.episode_number
+      );
+      return Array.isArray(response.data) ? response.data : [];
+    },
+    enabled: showStreams && !!seriesImdbId,
+  });
+
+  const toggleStreams = () => {
+    const next = !showStreams;
+    setShowStreams(next);
+    if (next && seriesImdbId) {
+      refetch();
+    }
+  };
+
+  const episodeCode = `S${String(episode.season_number).padStart(2, '0')}E${String(episode.episode_number).padStart(2, '0')}`;
+
+  return (
+    <div className="rounded-lg bg-white/5 border border-white/10 overflow-hidden">
+      <button
+        type="button"
+        onClick={toggleStreams}
+        className="w-full text-left p-4 hover:bg-white/10 transition-colors group"
+      >
+        <div className="flex items-start gap-4">
+          {episode.still_path && (
+            <img
+              src={tmdbImageUrl(episode.still_path, 'w300')}
+              alt={episode.title}
+              className="hidden sm:block w-32 aspect-video rounded object-cover bg-slate-800"
+            />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-3 text-white">
+              <span className="text-slate-400 font-mono text-sm">{episodeCode}</span>
+              <span className="font-semibold truncate">{episode.title || `Episode ${episode.episode_number}`}</span>
+              {episode.air_date && (
+                <span className="text-slate-500 text-sm">{new Date(episode.air_date).getFullYear()}</span>
+              )}
+            </div>
+            {episode.overview && (
+              <p className="text-slate-400 text-sm mt-2 line-clamp-2">{episode.overview}</p>
+            )}
+          </div>
+          <ChevronDown className={`w-5 h-5 text-slate-400 flex-shrink-0 mt-1 transition-transform ${
+            showStreams ? 'rotate-180' : ''
+          }`} />
+        </div>
+      </button>
+
+      {showStreams && (
+        <div className="border-t border-white/10 bg-black/20 px-4 py-4">
+          {!seriesImdbId ? (
+            <p className="text-slate-400 text-center py-5">Unable to fetch streams - IMDB ID not available</p>
+          ) : streamsLoading ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="w-7 h-7 animate-spin text-red-600" />
+            </div>
+          ) : streams.length === 0 ? (
+            <p className="text-slate-400 text-center py-5">No streams found for this episode</p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-slate-500 font-medium">{streams.length} streams available</p>
+              {streams.slice(0, 12).map((stream, index) => (
+                <div key={`${stream.id}-${index}`} className="rounded bg-white/5 p-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-600 text-white">
+                      {stream.quality || 'Unknown'}
+                    </span>
+                    {stream.source && (
+                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-red-600 text-white">
+                        {stream.source}
+                      </span>
+                    )}
+                    {stream.codec && (
+                      <span className="px-2 py-0.5 rounded text-xs bg-slate-700 text-slate-300">
+                        {stream.codec.toUpperCase()}
+                      </span>
+                    )}
+                    {stream.cached && (
+                      <span className="px-2 py-0.5 rounded text-xs bg-green-600/80 text-white font-medium">
+                        Cached
+                      </span>
+                    )}
+                    {stream.size_gb > 0 && (
+                      <span className="text-xs text-slate-500">{stream.size_gb.toFixed(2)} GB</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
