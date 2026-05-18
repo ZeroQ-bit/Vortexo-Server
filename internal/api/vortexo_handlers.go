@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -51,9 +52,10 @@ type vortexoSource struct {
 }
 
 type vortexoPlayToken struct {
-	Hash  string `json:"hash,omitempty"`
-	URL   string `json:"url,omitempty"`
-	Title string `json:"title,omitempty"`
+	Hash    string `json:"hash,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Title   string `json:"title,omitempty"`
+	FileIdx int    `json:"fileIdx,omitempty"`
 }
 
 type vortexoSubtitleTranslateRequest struct {
@@ -183,10 +185,10 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
-	streamURL, err := h.rdClient.GetStreamURL(ctx, token.Hash)
+	streamURL, err := h.rdClient.GetStreamURLForFile(ctx, token.Hash, token.FileIdx, token.Title)
 	if err != nil {
 		log.Printf("[Vortexo] Failed to resolve source %q: %v", token.Title, err)
-		respondError(w, http.StatusBadGateway, "failed to resolve source")
+		respondError(w, http.StatusBadGateway, safeVortexoPlaybackError(err))
 		return
 	}
 
@@ -662,8 +664,9 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 		}
 
 		token := vortexoPlayToken{
-			Hash:  hash,
-			Title: stream.Title,
+			Hash:    hash,
+			Title:   stream.Title,
+			FileIdx: stream.FileIdx,
 		}
 		if !isValidHash(hash) && stream.URL != "" {
 			token.Hash = ""
@@ -712,6 +715,31 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 	}
 
 	return sources
+}
+
+func safeVortexoPlaybackError(err error) string {
+	if err == nil {
+		return "failed to resolve source"
+	}
+
+	var apiErr *services.RealDebridAPIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorName != "" {
+			return fmt.Sprintf("Real-Debrid rejected source: %s", apiErr.ErrorName)
+		}
+		if apiErr.StatusCode > 0 {
+			return fmt.Sprintf("Real-Debrid returned HTTP %d", apiErr.StatusCode)
+		}
+	}
+
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "failed to resolve source"
+	}
+	if len(message) > 180 {
+		message = message[:180] + "..."
+	}
+	return "failed to resolve source: " + message
 }
 
 func normalizeVortexoType(value string) string {

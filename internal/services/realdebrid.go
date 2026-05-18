@@ -46,14 +46,39 @@ func (e *RealDebridAPIError) Is(target error) bool {
 }
 
 type rdTorrentInfo struct {
-	ID       string   `json:"id"`
-	Filename string   `json:"filename"`
-	Hash     string   `json:"hash"`
-	Bytes    int64    `json:"bytes"`
-	Host     string   `json:"host"`
-	Status   string   `json:"status"`
-	Added    string   `json:"added"`
-	Links    []string `json:"links"`
+	ID       string          `json:"id"`
+	Filename string          `json:"filename"`
+	Hash     string          `json:"hash"`
+	Bytes    int64           `json:"bytes"`
+	Host     string          `json:"host"`
+	Status   string          `json:"status"`
+	Added    string          `json:"added"`
+	Links    []string        `json:"links"`
+	Files    []rdTorrentFile `json:"files"`
+}
+
+type rdTorrentFile struct {
+	ID       int         `json:"id"`
+	Path     string      `json:"path"`
+	Bytes    int64       `json:"bytes"`
+	Selected interface{} `json:"selected"`
+}
+
+func (f rdTorrentFile) isSelected() bool {
+	switch value := f.Selected.(type) {
+	case bool:
+		return value
+	case float64:
+		return value != 0
+	case int:
+		return value != 0
+	case string:
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
 }
 
 type rdTorrentListItem struct {
@@ -274,6 +299,13 @@ func (c *RealDebridClient) UnrestrictLink(ctx context.Context, link string) (*rd
 
 // GetStreamURL gets a direct streaming URL for a torrent
 func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (string, error) {
+	return c.GetStreamURLForFile(ctx, infoHash, 0, "")
+}
+
+// GetStreamURLForFile gets a direct streaming URL for the requested torrent
+// file. Stremio-style sources can include a file index; DMM sources usually do
+// not, so the preferred name and largest-video fallback keep selection stable.
+func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash string, fileIndex int, preferredName string) (string, error) {
 	infoHash = normalizeRealDebridHash(infoHash)
 	if !isValidRealDebridHash(infoHash) {
 		return "", fmt.Errorf("invalid torrent hash %q", truncateString(infoHash, 12))
@@ -300,6 +332,7 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 		return "", fmt.Errorf("failed to get torrent info: %w", err)
 	}
 	fmt.Printf("[RD-DEBUG] Torrent status: %s, Links: %d, Bytes: %d\n", info.Status, len(info.Links), info.Bytes)
+	targetFileID := chooseRDTorrentFileID(info, fileIndex, preferredName)
 
 	// Check if torrent is ready - should be "downloaded" for cached torrents
 	if info.Status != "downloaded" && info.Status != "waiting_files_selection" {
@@ -309,8 +342,12 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 
 	// Select all files
 	if info.Status == "waiting_files_selection" {
-		fmt.Printf("[RD-DEBUG] Selecting files for torrent %s\n", torrentID)
-		if err := c.SelectFiles(ctx, torrentID, []int{1}); err != nil {
+		fileIDs := []int(nil)
+		if targetFileID > 0 {
+			fileIDs = []int{targetFileID}
+		}
+		fmt.Printf("[RD-DEBUG] Selecting files for torrent %s: %v\n", torrentID, fileIDs)
+		if err := c.SelectFiles(ctx, torrentID, fileIDs); err != nil {
 			_ = c.DeleteTorrent(ctx, torrentID)
 			return "", fmt.Errorf("failed to select files: %w", err)
 		}
@@ -323,6 +360,9 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 			return "", fmt.Errorf("failed to refresh torrent info: %w", err)
 		}
 		fmt.Printf("[RD-DEBUG] After file selection - Status: %s, Links: %d\n", info.Status, len(info.Links))
+		if targetFileID <= 0 {
+			targetFileID = chooseRDTorrentFileID(info, fileIndex, preferredName)
+		}
 
 		// If still not downloaded after selection, it's not cached - delete it
 		if info.Status != "downloaded" {
@@ -338,9 +378,15 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 		return "", fmt.Errorf("no download links available (status: %s)", info.Status)
 	}
 
-	fmt.Printf("[RD-DEBUG] Unrestricting link: %s\n", info.Links[0])
+	link, err := chooseRDDownloadLink(info, targetFileID, fileIndex, preferredName)
+	if err != nil {
+		_ = c.DeleteTorrent(ctx, torrentID)
+		return "", err
+	}
+
+	fmt.Printf("[RD-DEBUG] Unrestricting link: %s\n", link)
 	// Unrestrict the link to get direct download URL
-	unrestricted, err := c.UnrestrictLink(ctx, info.Links[0])
+	unrestricted, err := c.UnrestrictLink(ctx, link)
 	if err != nil {
 		_ = c.DeleteTorrent(ctx, torrentID)
 		return "", fmt.Errorf("failed to unrestrict link: %w", err)
@@ -355,6 +401,138 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 
 	fmt.Printf("[RD-DEBUG] Got link URL: %s\n", unrestricted.Link)
 	return unrestricted.Link, nil
+}
+
+func chooseRDTorrentFileID(info *rdTorrentInfo, fileIndex int, preferredName string) int {
+	if info == nil || len(info.Files) == 0 {
+		return 0
+	}
+
+	if preferred := normalizeRDFileMatch(preferredName); preferred != "" {
+		bestID := 0
+		var bestBytes int64
+		for _, file := range info.Files {
+			name := normalizeRDFileMatch(file.Path)
+			if name == "" || !rdFileLooksPlayable(file.Path) {
+				continue
+			}
+			if strings.Contains(name, preferred) || strings.Contains(preferred, name) {
+				if file.Bytes >= bestBytes {
+					bestID = file.ID
+					bestBytes = file.Bytes
+				}
+			}
+		}
+		if bestID > 0 {
+			return bestID
+		}
+	}
+
+	if fileIndex > 0 {
+		for _, file := range info.Files {
+			if file.ID == fileIndex || file.ID == fileIndex+1 {
+				return file.ID
+			}
+		}
+		if fileIndex < len(info.Files) {
+			return info.Files[fileIndex].ID
+		}
+		if fileIndex-1 >= 0 && fileIndex-1 < len(info.Files) {
+			return info.Files[fileIndex-1].ID
+		}
+	}
+
+	return largestRDVideoFileID(info.Files)
+}
+
+func chooseRDDownloadLink(info *rdTorrentInfo, targetFileID, fileIndex int, preferredName string) (string, error) {
+	if info == nil || len(info.Links) == 0 {
+		return "", fmt.Errorf("no download links available")
+	}
+	if len(info.Links) == 1 {
+		return info.Links[0], nil
+	}
+
+	if targetFileID <= 0 {
+		targetFileID = chooseRDTorrentFileID(info, fileIndex, preferredName)
+	}
+
+	selectedFiles := make([]rdTorrentFile, 0, len(info.Files))
+	for _, file := range info.Files {
+		if file.isSelected() {
+			selectedFiles = append(selectedFiles, file)
+		}
+	}
+	if len(selectedFiles) == 0 && len(info.Files) == len(info.Links) {
+		selectedFiles = info.Files
+	}
+
+	if targetFileID > 0 && len(selectedFiles) == len(info.Links) {
+		for index, file := range selectedFiles {
+			if file.ID == targetFileID && index < len(info.Links) {
+				return info.Links[index], nil
+			}
+		}
+	}
+
+	if fileIndex >= 0 && fileIndex < len(info.Links) {
+		return info.Links[fileIndex], nil
+	}
+	if fileIndex > 0 && fileIndex-1 < len(info.Links) {
+		return info.Links[fileIndex-1], nil
+	}
+
+	return info.Links[0], nil
+}
+
+func largestRDVideoFileID(files []rdTorrentFile) int {
+	bestID := 0
+	var bestBytes int64
+	for _, file := range files {
+		if !rdFileLooksPlayable(file.Path) {
+			continue
+		}
+		if file.Bytes >= bestBytes {
+			bestID = file.ID
+			bestBytes = file.Bytes
+		}
+	}
+	if bestID > 0 {
+		return bestID
+	}
+	for _, file := range files {
+		if file.Bytes >= bestBytes {
+			bestID = file.ID
+			bestBytes = file.Bytes
+		}
+	}
+	return bestID
+}
+
+func rdFileLooksPlayable(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	for _, ext := range []string{".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".webm"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRDFileMatch(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, "\\", "/")
+	if slash := strings.LastIndex(value, "/"); slash >= 0 {
+		value = value[slash+1:]
+	}
+	for _, ext := range []string{".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".webm"} {
+		value = strings.TrimSuffix(value, ext)
+	}
+	replacer := strings.NewReplacer(".", " ", "_", " ", "-", " ", "'", "", "\"", "", "[", " ", "]", " ", "(", " ", ")", " ")
+	return strings.Join(strings.Fields(replacer.Replace(value)), " ")
 }
 
 // DeleteTorrent removes a torrent from Real-Debrid
