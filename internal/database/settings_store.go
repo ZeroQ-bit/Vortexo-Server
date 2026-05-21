@@ -134,6 +134,7 @@ func (s *SettingsStore) mapToResponse(m map[string]string) *models.SettingsRespo
 
 	return &models.SettingsResponse{
 		TMDBAPIKey:                     getString("tmdb_api_key"),
+		FanartTVAPIKey:                 getString("fanart_tv_api_key"),
 		RealDebridToken:                getString("realdebrid_token"),
 		PremiumizeAPIKey:               getString("premiumize_api_key"),
 		MDBListAPIKey:                  getString("mdblist_api_key"),
@@ -185,6 +186,7 @@ func (s *SettingsStore) mapToResponse(m map[string]string) *models.SettingsRespo
 func (s *SettingsStore) responseToMap(r *models.SettingsResponse) map[string]string {
 	return map[string]string{
 		"tmdb_api_key":                        r.TMDBAPIKey,
+		"fanart_tv_api_key":                   r.FanartTVAPIKey,
 		"realdebrid_token":                    r.RealDebridToken,
 		"premiumize_api_key":                  r.PremiumizeAPIKey,
 		"mdblist_api_key":                     r.MDBListAPIKey,

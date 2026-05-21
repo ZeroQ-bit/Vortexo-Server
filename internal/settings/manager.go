@@ -59,6 +59,7 @@ type Settings struct {
 
 	// API Keys
 	TMDBAPIKey       string `json:"tmdb_api_key"`
+	FanartTVAPIKey   string `json:"fanart_tv_api_key"`
 	RealDebridAPIKey string `json:"realdebrid_api_key"`
 	PremiumizeAPIKey string `json:"premiumize_api_key"`
 	MDBListAPIKey    string `json:"mdblist_api_key"`
@@ -552,6 +553,12 @@ func (m *Manager) GetTMDBAPIKey() string {
 	return m.settings.TMDBAPIKey
 }
 
+func (m *Manager) GetFanartTVAPIKey() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings.FanartTVAPIKey
+}
+
 func (m *Manager) GetRealDebridAPIKey() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -646,6 +653,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 
 	return map[string]interface{}{
 		"tmdb_api_key":                        m.settings.TMDBAPIKey,
+		"fanart_tv_api_key":                   m.settings.FanartTVAPIKey,
 		"realdebrid_api_key":                  m.settings.RealDebridAPIKey,
 		"realdebrid_token":                    m.settings.RealDebridAPIKey,
 		"premiumize_api_key":                  m.settings.PremiumizeAPIKey,
@@ -700,6 +708,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	// Update settings fields from map
 	if v, ok := updates["tmdb_api_key"].(string); ok {
 		m.settings.TMDBAPIKey = v
+	}
+	if v, ok := updates["fanart_tv_api_key"].(string); ok {
+		m.settings.FanartTVAPIKey = v
 	}
 	if v, ok := updates["realdebrid_api_key"].(string); ok {
 		m.settings.RealDebridAPIKey = v

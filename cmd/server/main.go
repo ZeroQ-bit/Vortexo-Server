@@ -134,6 +134,10 @@ func main() {
 		cfg.TMDBAPIKey = appSettings.TMDBAPIKey
 		log.Println("✓ TMDB API key loaded from settings")
 	}
+	if appSettings.FanartTVAPIKey != "" {
+		cfg.FanartTVAPIKey = appSettings.FanartTVAPIKey
+		log.Println("✓ Fanart.tv API key loaded from settings")
+	}
 	if appSettings.RealDebridAPIKey != "" {
 		cfg.RealDebridAPIKey = appSettings.RealDebridAPIKey
 		cfg.UseRealDebrid = true
@@ -237,7 +241,7 @@ func main() {
 	log.Println("Service scheduler initialized")
 
 	// Initialize service clients
-	tmdbClient := services.NewTMDBClient(cfg.TMDBAPIKey)
+	tmdbClient := services.NewTMDBClient(cfg.TMDBAPIKey, cfg.FanartTVAPIKey)
 	rdClient := services.NewRealDebridClient(cfg.RealDebridAPIKey)
 
 	// Initialize Live TV channel manager

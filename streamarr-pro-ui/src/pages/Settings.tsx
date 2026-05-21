@@ -54,6 +54,7 @@ api.interceptors.request.use(
 
 interface SettingsData {
   tmdb_api_key: string;
+  fanart_tv_api_key: string;
   realdebrid_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
@@ -1730,6 +1731,33 @@ export default function Settings() {
                         className="text-red-400 hover:underline"
                       >
                         Get one free
+                      </a>
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Fanart.tv API Key
+                    </label>
+                    <input
+                      type="text"
+                      value={settings?.fanart_tv_api_key || ""}
+                      onChange={(e) =>
+                        updateSetting("fanart_tv_api_key", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Your Fanart.tv API key"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Optional. Used for logos, clear art, backgrounds, and
+                      posters.{" "}
+                      <a
+                        href="https://api.fanart.tv/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-red-400 hover:underline"
+                      >
+                        Get API key
                       </a>
                     </p>
                   </div>

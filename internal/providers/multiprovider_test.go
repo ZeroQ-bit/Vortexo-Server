@@ -54,6 +54,40 @@ func TestBuildRuntimeAddonsReturnsEmptyWithoutRealDebrid(t *testing.T) {
 	}
 }
 
+func TestGenericStremioProviderPreservesConfiguredTorrentioURL(t *testing.T) {
+	provider := NewGenericStremioProvider(
+		"Torrentio",
+		"https://torrentio.strem.fun/sort=qualitysize|qualityfilter=threed,scr",
+		"rd-token",
+		nil,
+	)
+
+	got := provider.buildConfigURL("movie", "tt123", nil, nil)
+	want := "https://torrentio.strem.fun/sort=qualitysize|qualityfilter=threed,scr|debridoptions=nodownloadlinks,nocatalog|realdebrid=rd-token/stream/movie/tt123.json"
+	if got != want {
+		t.Fatalf("expected configured Torrentio URL to be preserved, got %q", got)
+	}
+}
+
+func TestGenericStremioProviderRewritesManifestURL(t *testing.T) {
+	provider := NewGenericStremioProvider(
+		"MediaFusion",
+		"https://mediafusion.example/config/manifest.json",
+		"rd-token",
+		nil,
+	)
+
+	got := provider.buildConfigURL("series", "tt123", intPtr(2), intPtr(5))
+	want := "https://mediafusion.example/config/stream/series/tt123:2:5.json"
+	if got != want {
+		t.Fatalf("expected manifest URL to become stream URL, got %q", got)
+	}
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
 func TestGetBestStreamAppliesQualityExclusions(t *testing.T) {
 	mp := &MultiProvider{
 		Providers: []StreamProvider{fakeStreamProvider{movieStreams: []TorrentioStream{

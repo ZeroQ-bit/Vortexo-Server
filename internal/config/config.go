@@ -25,6 +25,7 @@ type Config struct {
 
 	// API Keys
 	TMDBAPIKey       string
+	FanartTVAPIKey   string
 	RealDebridAPIKey string
 	PremiumizeAPIKey string
 	MDBListAPIKey    string
@@ -92,6 +93,7 @@ func Load() *Config {
 
 		// API Keys - empty by default, set via Web UI
 		TMDBAPIKey:       "",
+		FanartTVAPIKey:   "",
 		RealDebridAPIKey: "",
 		PremiumizeAPIKey: "",
 		MDBListAPIKey:    "",

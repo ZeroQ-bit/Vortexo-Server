@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,16 +18,24 @@ import (
 const (
 	tmdbBaseURL      = "https://api.themoviedb.org/3"
 	tmdbImageBaseURL = "https://image.tmdb.org/t/p"
+	fanartBaseURL    = "https://webservice.fanart.tv/v3"
 )
 
 type TMDBClient struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey       string
+	fanartAPIKey string
+	httpClient   *http.Client
 }
 
-func NewTMDBClient(apiKey string) *TMDBClient {
+func NewTMDBClient(apiKey string, fanartAPIKey ...string) *TMDBClient {
+	var fanartKey string
+	if len(fanartAPIKey) > 0 {
+		fanartKey = strings.TrimSpace(fanartAPIKey[0])
+	}
+
 	return &TMDBClient{
-		apiKey: apiKey,
+		apiKey:       apiKey,
+		fanartAPIKey: fanartKey,
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -145,6 +154,29 @@ type tmdbSearchResult struct {
 	Results      []interface{} `json:"results"`
 	TotalResults int           `json:"total_results"`
 	TotalPages   int           `json:"total_pages"`
+}
+
+type tmdbImageFile struct {
+	FilePath    string  `json:"file_path"`
+	ISO6391     string  `json:"iso_639_1"`
+	VoteAverage float64 `json:"vote_average"`
+	VoteCount   int     `json:"vote_count"`
+}
+
+type tmdbImagesResponse struct {
+	Logos []tmdbImageFile `json:"logos"`
+}
+
+type FanartArtwork struct {
+	LogoPaths     []string `json:"logo_paths"`
+	BackdropPaths []string `json:"backdrop_paths"`
+	PosterPaths   []string `json:"poster_paths"`
+}
+
+type fanartImageCandidate struct {
+	URL   string
+	Lang  string
+	Likes int
 }
 
 // GetMovie retrieves movie details from TMDB
@@ -380,6 +412,9 @@ func (c *TMDBClient) GetSeries(ctx context.Context, tmdbID int) (*models.Series,
 		series.IMDBID = externalIDs.IMDBID
 		series.Metadata["imdb_id"] = externalIDs.IMDBID
 	}
+	if err == nil && externalIDs.TVDBID > 0 {
+		series.Metadata["tvdb_id"] = externalIDs.TVDBID
+	}
 
 	return series, nil
 }
@@ -449,6 +484,227 @@ func (c *TMDBClient) GetVideos(ctx context.Context, mediaType string, tmdbID int
 	}
 
 	return result.Results, nil
+}
+
+// GetLogoPath retrieves the preferred clear title logo path for a movie/series.
+func (c *TMDBClient) GetLogoPath(ctx context.Context, mediaType string, tmdbID int) (string, error) {
+	var endpoint string
+	if mediaType == "movie" {
+		endpoint = fmt.Sprintf("%s/movie/%d/images", tmdbBaseURL, tmdbID)
+	} else {
+		endpoint = fmt.Sprintf("%s/tv/%d/images", tmdbBaseURL, tmdbID)
+	}
+
+	params := url.Values{}
+	params.Set("api_key", c.apiKey)
+	params.Set("include_image_language", "en,null")
+
+	data, err := c.makeRequest(ctx, endpoint, params)
+	if err != nil {
+		return "", err
+	}
+
+	var result tmdbImagesResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", fmt.Errorf("failed to unmarshal images: %w", err)
+	}
+
+	var best *tmdbImageFile
+	for i := range result.Logos {
+		logo := &result.Logos[i]
+		if strings.TrimSpace(logo.FilePath) == "" {
+			continue
+		}
+		if best == nil || betterTMDBLogo(logo, best) {
+			best = logo
+		}
+	}
+
+	if best == nil {
+		return "", nil
+	}
+	return best.FilePath, nil
+}
+
+func betterTMDBLogo(candidate, current *tmdbImageFile) bool {
+	candidateLanguageScore := tmdbLogoLanguageScore(candidate.ISO6391)
+	currentLanguageScore := tmdbLogoLanguageScore(current.ISO6391)
+	if candidateLanguageScore != currentLanguageScore {
+		return candidateLanguageScore > currentLanguageScore
+	}
+	if candidate.VoteCount != current.VoteCount {
+		return candidate.VoteCount > current.VoteCount
+	}
+	return candidate.VoteAverage > current.VoteAverage
+}
+
+func tmdbLogoLanguageScore(language string) int {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "en":
+		return 2
+	case "":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// GetFanartArtwork fetches Fanart.tv artwork for a movie or TV show.
+// Fanart.tv accepts TMDB/IMDb IDs for movies and TVDB IDs for shows.
+func (c *TMDBClient) GetFanartArtwork(
+	ctx context.Context,
+	mediaType string,
+	tmdbID int,
+	imdbID string,
+	tvdbID int,
+) (FanartArtwork, error) {
+	var artwork FanartArtwork
+	if strings.TrimSpace(c.fanartAPIKey) == "" {
+		return artwork, nil
+	}
+
+	var endpoint string
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "movie":
+		id := strings.TrimSpace(imdbID)
+		if tmdbID > 0 {
+			id = strconv.Itoa(tmdbID)
+		}
+		if id == "" {
+			return artwork, nil
+		}
+		endpoint = fmt.Sprintf("%s/movies/%s", fanartBaseURL, id)
+	default:
+		if tvdbID <= 0 {
+			return artwork, nil
+		}
+		endpoint = fmt.Sprintf("%s/tv/%d", fanartBaseURL, tvdbID)
+	}
+
+	data, err := c.makeFanartRequest(ctx, endpoint)
+	if err != nil {
+		return artwork, err
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return artwork, fmt.Errorf("failed to unmarshal Fanart.tv response: %w", err)
+	}
+
+	if strings.EqualFold(mediaType, "movie") {
+		artwork.LogoPaths = fanartURLs(raw, []string{"hdmovielogo", "movielogo"})
+		artwork.BackdropPaths = fanartURLs(raw, []string{"moviebackground", "moviethumb"})
+		artwork.PosterPaths = fanartURLs(raw, []string{"movieposter"})
+	} else {
+		artwork.LogoPaths = fanartURLs(raw, []string{"hdtvlogo", "clearlogo"})
+		artwork.BackdropPaths = fanartURLs(raw, []string{"showbackground", "tvthumb"})
+		artwork.PosterPaths = fanartURLs(raw, []string{"tvposter"})
+	}
+
+	return artwork, nil
+}
+
+func (c *TMDBClient) makeFanartRequest(ctx context.Context, endpoint string) ([]byte, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse Fanart.tv endpoint %s: %w", endpoint, err)
+	}
+
+	q := u.Query()
+	q.Set("api_key", c.fanartAPIKey)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Fanart.tv request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to make request to Fanart.tv: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Fanart.tv response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return []byte(`{}`), nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Fanart.tv returned status %d: %s", resp.StatusCode, string(data))
+	}
+
+	return data, nil
+}
+
+func fanartURLs(raw map[string]json.RawMessage, fields []string) []string {
+	var candidates []fanartImageCandidate
+	for _, field := range fields {
+		var entries []map[string]interface{}
+		if err := json.Unmarshal(raw[field], &entries); err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			urlValue, _ := entry["url"].(string)
+			if strings.TrimSpace(urlValue) == "" {
+				continue
+			}
+
+			lang, _ := entry["lang"].(string)
+			candidates = append(candidates, fanartImageCandidate{
+				URL:   strings.TrimSpace(urlValue),
+				Lang:  lang,
+				Likes: fanartLikes(entry["likes"]),
+			})
+		}
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iLang := fanartLanguageScore(candidates[i].Lang)
+		jLang := fanartLanguageScore(candidates[j].Lang)
+		if iLang != jLang {
+			return iLang > jLang
+		}
+		return candidates[i].Likes > candidates[j].Likes
+	})
+
+	seen := make(map[string]bool, len(candidates))
+	urls := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if seen[candidate.URL] {
+			continue
+		}
+		seen[candidate.URL] = true
+		urls = append(urls, candidate.URL)
+	}
+	return urls
+}
+
+func fanartLanguageScore(language string) int {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "en":
+		return 3
+	case "", "00":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func fanartLikes(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case string:
+		i, _ := strconv.Atoi(v)
+		return i
+	default:
+		return 0
+	}
 }
 
 // GetSeriesExternalIDs retrieves external IDs (IMDB, TVDB, etc.) for a series

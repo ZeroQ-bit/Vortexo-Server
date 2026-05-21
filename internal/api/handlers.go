@@ -94,7 +94,7 @@ func toProviderAddons(addons []settings.StremioAddon) []providers.StremioAddon {
 }
 
 func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
-	h.tmdbClient = services.NewTMDBClient(cfg.TMDBAPIKey)
+	h.tmdbClient = services.NewTMDBClient(cfg.TMDBAPIKey, cfg.FanartTVAPIKey)
 	h.rdClient = services.NewRealDebridClient(cfg.RealDebridAPIKey)
 
 	var proxies []string
@@ -241,6 +241,7 @@ func (h *Handler) refreshRuntimeConfig(cfg *settings.Settings) {
 	}
 
 	h.runtimeConfig.UserCreatePlaylist = cfg.UserCreatePlaylist
+	h.runtimeConfig.FanartTVAPIKey = cfg.FanartTVAPIKey
 	h.runtimeConfig.IncludeAdultVOD = cfg.IncludeAdultVOD
 	h.runtimeConfig.EnableQualityVariants = cfg.EnableQualityVariants
 	h.runtimeConfig.ShowFullStreamName = cfg.ShowFullStreamName
@@ -1543,7 +1544,11 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PlayMovie(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	rawID := mux.Vars(r)["id"]
+	if rawID == "" {
+		rawID = r.URL.Query().Get("id")
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid movie ID")
 		return
@@ -2321,7 +2326,11 @@ func (h *Handler) GetSeriesEpisodes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PlayEpisode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	rawID := mux.Vars(r)["id"]
+	if rawID == "" {
+		rawID = r.URL.Query().Get("id")
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid episode ID")
 		return
@@ -3620,6 +3629,60 @@ func (h *Handler) SearchCollections(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, collections)
 }
 
+func appendUniqueStrings(values []string, extras ...string) []string {
+	seen := make(map[string]bool, len(values)+len(extras))
+	result := make([]string, 0, len(values)+len(extras))
+	for _, value := range append(values, extras...) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		result = append(result, trimmed)
+	}
+	return result
+}
+
+func firstString(values []string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func metadataString(metadata models.Metadata, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func metadataInt(metadata models.Metadata, key string) int {
+	if metadata == nil {
+		return 0
+	}
+
+	switch value := metadata[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		i, _ := value.Int64()
+		return int(i)
+	case string:
+		i, _ := strconv.Atoi(strings.TrimSpace(value))
+		return i
+	default:
+		return 0
+	}
+}
+
 // GetTMDBDetails handles GET /api/tmdb/{type}/{id} - get full TMDB details with videos
 func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -3643,6 +3706,19 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusNotFound, "movie not found")
 			return
 		}
+		imdbID := metadataString(movie.Metadata, "imdb_id")
+		fanart, fanartErr := h.tmdbClient.GetFanartArtwork(ctx, mediaType, tmdbID, imdbID, 0)
+		if fanartErr != nil {
+			log.Printf("[Fanart] movie %d artwork lookup failed: %v", tmdbID, fanartErr)
+		}
+		tmdbLogoPath := ""
+		if logoPath, err := h.tmdbClient.GetLogoPath(ctx, mediaType, tmdbID); err == nil {
+			tmdbLogoPath = logoPath
+		}
+		logoPaths := appendUniqueStrings(fanart.LogoPaths, tmdbLogoPath)
+		backdropPaths := appendUniqueStrings(fanart.BackdropPaths, movie.BackdropPath)
+		posterPaths := appendUniqueStrings(fanart.PosterPaths, movie.PosterPath)
+
 		response["id"] = movie.TMDBID
 		response["title"] = movie.Title
 		response["overview"] = movie.Overview
@@ -3652,12 +3728,36 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		response["vote_average"] = movie.VoteAverage
 		response["runtime"] = movie.Runtime
 		response["genres"] = movie.Genres
+		if logoPath := firstString(logoPaths); logoPath != "" {
+			response["logo_path"] = logoPath
+		}
+		response["logo_paths"] = logoPaths
+		response["backdrop_paths"] = backdropPaths
+		response["poster_paths"] = posterPaths
 	} else if mediaType == "tv" {
 		series, err := h.tmdbClient.GetSeries(ctx, tmdbID)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "series not found")
 			return
 		}
+		tvdbID := metadataInt(series.Metadata, "tvdb_id")
+		if tvdbID == 0 {
+			if externalIDs, err := h.tmdbClient.GetSeriesExternalIDs(ctx, tmdbID); err == nil && externalIDs != nil {
+				tvdbID = externalIDs.TVDBID
+			}
+		}
+		fanart, fanartErr := h.tmdbClient.GetFanartArtwork(ctx, mediaType, tmdbID, "", tvdbID)
+		if fanartErr != nil {
+			log.Printf("[Fanart] tv %d artwork lookup failed: %v", tmdbID, fanartErr)
+		}
+		tmdbLogoPath := ""
+		if logoPath, err := h.tmdbClient.GetLogoPath(ctx, mediaType, tmdbID); err == nil {
+			tmdbLogoPath = logoPath
+		}
+		logoPaths := appendUniqueStrings(fanart.LogoPaths, tmdbLogoPath)
+		backdropPaths := appendUniqueStrings(fanart.BackdropPaths, series.BackdropPath)
+		posterPaths := appendUniqueStrings(fanart.PosterPaths, series.PosterPath)
+
 		response["id"] = series.TMDBID
 		response["name"] = series.Title
 		response["overview"] = series.Overview
@@ -3667,6 +3767,12 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		response["vote_average"] = series.VoteAverage
 		response["number_of_seasons"] = series.Seasons
 		response["genres"] = series.Genres
+		if logoPath := firstString(logoPaths); logoPath != "" {
+			response["logo_path"] = logoPath
+		}
+		response["logo_paths"] = logoPaths
+		response["backdrop_paths"] = backdropPaths
+		response["poster_paths"] = posterPaths
 	} else {
 		respondError(w, http.StatusBadRequest, "invalid media type, must be 'movie' or 'tv'")
 		return

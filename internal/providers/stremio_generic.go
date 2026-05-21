@@ -24,10 +24,10 @@ type GenericStremioProvider struct {
 	RealDebridAPIKey string
 	Client           *http.Client
 	Cache            map[string]*GenericStreamCachedResponse
-	rateLimiter      chan struct{}  // Semaphore to limit concurrent requests
-	proxyURLs        []string       // List of proxy URLs for rotation
-	proxyIndex       int            // Current proxy index for round-robin
-	proxyMu          sync.Mutex     // Mutex for proxy rotation
+	rateLimiter      chan struct{} // Semaphore to limit concurrent requests
+	proxyURLs        []string      // List of proxy URLs for rotation
+	proxyIndex       int           // Current proxy index for round-robin
+	proxyMu          sync.Mutex    // Mutex for proxy rotation
 }
 
 type GenericStreamCachedResponse struct {
@@ -71,7 +71,7 @@ func NewGenericStremioProvider(name, baseURL, rdAPIKey string, proxies []string)
 		},
 		DisableCompression: true, // We'll handle compression manually via Accept-Encoding
 	}
-	
+
 	provider := &GenericStremioProvider{
 		Name:             name,
 		BaseURL:          baseURL,
@@ -81,11 +81,11 @@ func NewGenericStremioProvider(name, baseURL, rdAPIKey string, proxies []string)
 		proxyURLs:        []string{},
 		proxyIndex:       0,
 	}
-	
+
 	// Check for proxy configuration (for bypassing Cloudflare blocks)
 	// Priority: 1. Passed proxies parameter, 2. TORRENTIO_PROXY env var
 	// Supports multiple proxies for fallback/rotation
-	
+
 	// First check passed proxies parameter (from settings)
 	if len(proxies) > 0 {
 		for _, p := range proxies {
@@ -95,7 +95,7 @@ func NewGenericStremioProvider(name, baseURL, rdAPIKey string, proxies []string)
 			}
 		}
 	}
-	
+
 	// Fallback to env var if no proxies passed
 	if len(provider.proxyURLs) == 0 {
 		if proxyEnv := os.Getenv("TORRENTIO_PROXY"); proxyEnv != "" {
@@ -108,32 +108,32 @@ func NewGenericStremioProvider(name, baseURL, rdAPIKey string, proxies []string)
 			}
 		}
 	}
-	
+
 	if len(provider.proxyURLs) > 0 {
 		log.Printf("[PROXY] Configured %d proxies for %s", len(provider.proxyURLs), name)
-		
+
 		// Use dynamic proxy selection
 		transport.Proxy = func(r *http.Request) (*url.URL, error) {
 			provider.proxyMu.Lock()
 			proxyURL := provider.proxyURLs[provider.proxyIndex]
 			provider.proxyMu.Unlock()
-			
+
 			proxy, err := url.Parse(proxyURL)
 			if err != nil {
 				log.Printf("[PROXY] Invalid proxy URL %s: %v", proxyURL, err)
 				return nil, err
 			}
-			
+
 			log.Printf("[PROXY] Using proxy %d/%d: %s", provider.proxyIndex+1, len(provider.proxyURLs), proxyURL)
 			return proxy, nil
 		}
 	}
-	
+
 	provider.Client = &http.Client{
 		Timeout:   120 * time.Second,
 		Transport: transport,
 	}
-	
+
 	return provider
 }
 
@@ -156,30 +156,29 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 	} else {
 		contentPath = fmt.Sprintf("stream/movie/%s.json", imdbID)
 	}
-	
-	baseURL := g.BaseURL
-	
-	// If the URL already contains manifest.json, replace it with the stream path
-	// This handles pre-configured addon URLs like Torrentio, Autostream, Sootio, etc.
-	if strings.Contains(baseURL, "/manifest.json") {
-		return strings.Replace(baseURL, "/manifest.json", "/"+contentPath, 1)
+
+	baseURL := strings.TrimRight(g.BaseURL, "/")
+
+	// If the user pasted a configured addon URL, keep that configuration.
+	// Examples:
+	//   https://torrentio.strem.fun/sort=qualitysize|qualityfilter=...
+	//   https://mediafusion.example/{encoded-config}/manifest.json
+	if configuredBase, ok := g.configuredAddonBaseURL(baseURL); ok {
+		if g.RealDebridAPIKey != "" && g.isTorrentio() && !strings.Contains(strings.ToLower(configuredBase), "realdebrid=") {
+			configuredBase += "|debridoptions=nodownloadlinks,nocatalog|realdebrid=" + g.RealDebridAPIKey
+		}
+		return fmt.Sprintf("%s/%s", configuredBase, contentPath)
 	}
-	if strings.Contains(baseURL, "manifest.json") {
-		return strings.Replace(baseURL, "manifest.json", contentPath, 1)
-	}
-	
+
 	// If no Real-Debrid key, just use base URL
 	if g.RealDebridAPIKey == "" {
 		return fmt.Sprintf("%s/%s", baseURL, contentPath)
 	}
-	
+
 	// Detect addon type by URL and use appropriate config format
-	lowerName := strings.ToLower(g.Name)
-	lowerURL := strings.ToLower(baseURL)
-	
 	var configJSON []byte
-	
-	if strings.Contains(lowerName, "comet") || strings.Contains(lowerURL, "comet") {
+
+	if g.isComet() {
 		// Comet format
 		config := map[string]interface{}{
 			"indexers":      []string{"bitorrent", "thepiratebay", "yts", "eztv", "kickasstorrents", "torrentgalaxy"},
@@ -187,12 +186,12 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 			"debridApiKey":  g.RealDebridAPIKey,
 		}
 		configJSON, _ = json.Marshal(config)
-	} else if strings.Contains(lowerName, "torrentio") || strings.Contains(lowerURL, "torrentio") {
+	} else if g.isTorrentio() {
 		// Torrentio format with explicit quality filters
 		// Excludes: BRREMUX, all HDR, Dolby Vision, 3D, SCR (screener), CAM, TS/HDTS/TC (telecine), UNKNOWN
 		configPath := fmt.Sprintf("providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubs,nyaasi,tokyotosho,anidex|sort=qualitysize|qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,scr,cam,hdts,hd-ts,hdtc,hd-tc,ts,tc,unknown|debridoptions=nodownloadlinks,nocatalog|realdebrid=%s", g.RealDebridAPIKey)
 		return fmt.Sprintf("%s/%s/%s", g.BaseURL, configPath, contentPath)
-	} else if strings.Contains(lowerName, "mediafusion") || strings.Contains(lowerURL, "mediafusion") {
+	} else if g.isMediaFusion() {
 		// MediaFusion format
 		config := map[string]interface{}{
 			"streaming_provider": map[string]string{
@@ -211,9 +210,48 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 		}
 		configJSON, _ = json.Marshal(config)
 	}
-	
+
 	configBase64 := base64.StdEncoding.EncodeToString(configJSON)
 	return fmt.Sprintf("%s/%s/%s", g.BaseURL, configBase64, contentPath)
+}
+
+func (g *GenericStremioProvider) configuredAddonBaseURL(baseURL string) (string, bool) {
+	if strings.Contains(baseURL, "/manifest.json") {
+		return strings.Replace(baseURL, "/manifest.json", "", 1), true
+	}
+	if strings.HasSuffix(baseURL, "manifest.json") {
+		return strings.TrimSuffix(baseURL, "manifest.json"), true
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", false
+	}
+
+	configPath := strings.Trim(parsed.EscapedPath(), "/")
+	if configPath == "" {
+		return "", false
+	}
+
+	return baseURL, true
+}
+
+func (g *GenericStremioProvider) isComet() bool {
+	lowerName := strings.ToLower(g.Name)
+	lowerURL := strings.ToLower(g.BaseURL)
+	return strings.Contains(lowerName, "comet") || strings.Contains(lowerURL, "comet")
+}
+
+func (g *GenericStremioProvider) isTorrentio() bool {
+	lowerName := strings.ToLower(g.Name)
+	lowerURL := strings.ToLower(g.BaseURL)
+	return strings.Contains(lowerName, "torrentio") || strings.Contains(lowerURL, "torrentio")
+}
+
+func (g *GenericStremioProvider) isMediaFusion() bool {
+	lowerName := strings.ToLower(g.Name)
+	lowerURL := strings.ToLower(g.BaseURL)
+	return strings.Contains(lowerName, "mediafusion") || strings.Contains(lowerURL, "mediafusion")
 }
 
 func (g *GenericStremioProvider) GetMovieStreams(imdbID string) ([]TorrentioStream, error) {
@@ -228,22 +266,22 @@ func (g *GenericStremioProvider) GetSeriesStreams(imdbID string, season, episode
 
 func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]TorrentioStream, error) {
 	log.Printf("[FETCH] Requesting: %s", url)
-	
+
 	// Check cache
 	if cached, ok := g.Cache[cacheKey]; ok {
 		if time.Since(cached.Timestamp) < 30*time.Minute {
 			return g.convertToTorrentioStreams(cached.Data.Streams), nil
 		}
 	}
-	
+
 	// Rate limiting: max 2 concurrent requests to avoid overwhelming the addon
 	g.rateLimiter <- struct{}{}        // Acquire
 	defer func() { <-g.rateLimiter }() // Release
-	
+
 	// Retry logic for rate limiting and transient errors
 	maxRetries := 3
 	var lastErr error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Exponential backoff: 1s, 2s, 4s
 		if attempt > 0 {
@@ -251,18 +289,18 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 			log.Printf("[RETRY] Attempt %d for %s (backing off %v)", attempt+1, g.Name, backoff)
 			time.Sleep(backoff)
 		}
-		
+
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
 		}
-		
+
 		// Set browser-like headers to bypass Cloudflare
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "application/json, text/plain, */*")
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		req.Header.Set("Connection", "keep-alive")
-		
+
 		resp, err := g.Client.Do(req)
 		if err != nil {
 			lastErr = err
@@ -270,7 +308,7 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 			continue
 		}
 		defer resp.Body.Close()
-		
+
 		// Retry on 429 (rate limit) or 503 (service unavailable)
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			lastErr = fmt.Errorf("rate limited/service unavailable: %d", resp.StatusCode)
@@ -280,16 +318,16 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 			}
 			return nil, lastErr
 		}
-		
+
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
-		
+
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
-		
+
 		// Check if response is an error from the addon
 		var errorResponse struct {
 			Err     string `json:"err"`
@@ -299,8 +337,8 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 		if err := json.Unmarshal(body, &errorResponse); err == nil {
 			if errorResponse.Err != "" {
 				lastErr = fmt.Errorf("addon error: %s", errorResponse.Err)
-				if strings.Contains(strings.ToLower(errorResponse.Err), "too many") || 
-				   strings.Contains(strings.ToLower(errorResponse.Err), "rate limit") {
+				if strings.Contains(strings.ToLower(errorResponse.Err), "too many") ||
+					strings.Contains(strings.ToLower(errorResponse.Err), "rate limit") {
 					// Retry on rate limit errors
 					if attempt < maxRetries-1 {
 						continue
@@ -315,21 +353,21 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 				return nil, fmt.Errorf("addon error: %s", errorResponse.Message)
 			}
 		}
-		
+
 		var response GenericStreamResponse
 		if err := json.Unmarshal(body, &response); err != nil {
 			return nil, fmt.Errorf("decode response: %w", err)
 		}
-		
+
 		// Cache the response
 		g.Cache[cacheKey] = &GenericStreamCachedResponse{
 			Data:      &response,
 			Timestamp: time.Now(),
 		}
-		
+
 		return g.convertToTorrentioStreams(response.Streams), nil
 	}
-	
+
 	// All retries failed
 	if lastErr != nil {
 		return nil, lastErr
@@ -339,7 +377,7 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 
 func (g *GenericStremioProvider) convertToTorrentioStreams(genericStreams []GenericStream) []TorrentioStream {
 	streams := make([]TorrentioStream, len(genericStreams))
-	
+
 	for i, gs := range genericStreams {
 		// Use filename from behaviorHints if available, otherwise fall back to title/name
 		filename := gs.BehaviorHints.Filename
@@ -349,27 +387,27 @@ func (g *GenericStremioProvider) convertToTorrentioStreams(genericStreams []Gene
 		if filename == "" {
 			filename = gs.Name
 		}
-		
+
 		// Use videoSize from behaviorHints if available
 		size := gs.BehaviorHints.VideoSize
-		
+
 		// If no size from behaviorHints, try to parse from title first (Torrentio format)
 		if size == 0 && gs.Title != "" {
 			size = parseSizeFromDescription(gs.Title)
 		}
-		
+
 		// Then try description
 		if size == 0 && gs.Description != "" {
 			size = parseSizeFromDescription(gs.Description)
 		}
-		
+
 		// Check if stream is cached in debrid service
 		// Look for explicit cache indicators in the name field
 		// TorrentsDB uses "[RD download]", some addons use "[RD+]" or "⚡"
 		nameLower := strings.ToLower(gs.Name)
 		cached := false
 		cacheIndicator := ""
-		
+
 		if strings.Contains(gs.Name, "[RD download]") {
 			cached = true
 			cacheIndicator = "[RD download]"
@@ -386,11 +424,11 @@ func (g *GenericStremioProvider) convertToTorrentioStreams(genericStreams []Gene
 			cached = true
 			cacheIndicator = "instant available"
 		}
-		
+
 		// Log the cached determination for debugging - this will help us see what indicators TorrentsDB is actually sending
-		log.Printf("[CACHED-CHECK] Stream: %s | Cached: %v | Indicator Found: %s | Full Name: %s", 
+		log.Printf("[CACHED-CHECK] Stream: %s | Cached: %v | Indicator Found: %s | Full Name: %s",
 			filename, cached, cacheIndicator, gs.Name)
-		
+
 		// Extract quality from name, title, or filename
 		// TorrentsDB puts quality in the name field like "2160p", "1080p", etc.
 		quality := extractQuality(gs.Name)
@@ -400,7 +438,7 @@ func (g *GenericStremioProvider) convertToTorrentioStreams(genericStreams []Gene
 		if quality == "" {
 			quality = extractQuality(filename)
 		}
-		
+
 		stream := TorrentioStream{
 			Name:     gs.Name,
 			Title:    filename, // Use the actual filename here
@@ -412,10 +450,10 @@ func (g *GenericStremioProvider) convertToTorrentioStreams(genericStreams []Gene
 			Cached:   cached,
 			Quality:  quality,
 		}
-		
+
 		streams[i] = stream
 	}
-	
+
 	return streams
 }
 
@@ -424,7 +462,7 @@ func parseSizeFromDescription(desc string) int64 {
 	// Look for size pattern in description
 	// Common formats: "💾 1.5 GB", "💾 500 MB", "Size: 1.5GB"
 	desc = strings.ToUpper(desc)
-	
+
 	// Find GB pattern
 	if idx := strings.Index(desc, "GB"); idx > 0 {
 		// Look backwards for the number
@@ -433,7 +471,7 @@ func parseSizeFromDescription(desc string) int64 {
 			return int64(num * 1024 * 1024 * 1024)
 		}
 	}
-	
+
 	// Find MB pattern
 	if idx := strings.Index(desc, "MB"); idx > 0 {
 		numStr := extractNumberBefore(desc, idx)
@@ -441,7 +479,7 @@ func parseSizeFromDescription(desc string) int64 {
 			return int64(num * 1024 * 1024)
 		}
 	}
-	
+
 	return 0
 }
 
@@ -452,7 +490,7 @@ func extractNumberBefore(s string, idx int) string {
 	for end > 0 && s[end-1] == ' ' {
 		end--
 	}
-	
+
 	start := end
 	hasDecimal := false
 	for start > 0 {
@@ -468,6 +506,6 @@ func extractNumberBefore(s string, idx int) string {
 			break
 		}
 	}
-	
+
 	return strings.TrimSpace(s[start:end])
 }

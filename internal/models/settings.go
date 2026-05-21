@@ -15,6 +15,7 @@ type Settings struct {
 type SettingsResponse struct {
 	// API Keys
 	TMDBAPIKey       string `json:"tmdb_api_key"`
+	FanartTVAPIKey   string `json:"fanart_tv_api_key"`
 	RealDebridToken  string `json:"realdebrid_token"`
 	PremiumizeAPIKey string `json:"premiumize_api_key"`
 	MDBListAPIKey    string `json:"mdblist_api_key"`

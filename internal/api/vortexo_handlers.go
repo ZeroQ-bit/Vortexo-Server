@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
@@ -57,6 +58,20 @@ type vortexoPlayToken struct {
 	Title   string `json:"title,omitempty"`
 	FileIdx int    `json:"fileIdx,omitempty"`
 }
+
+type vortexoBlockedSource struct {
+	Reason    string
+	ExpiresAt time.Time
+}
+
+var vortexoBlockedSources = struct {
+	sync.RWMutex
+	byHash map[string]vortexoBlockedSource
+}{
+	byHash: make(map[string]vortexoBlockedSource),
+}
+
+const vortexoBlockedSourceTTL = 24 * time.Hour
 
 type vortexoSubtitleTranslateRequest struct {
 	Text       string `json:"text"`
@@ -136,7 +151,12 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 	} else {
 		providerStreams, err = h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
 		if err == nil && req.Title != "" {
-			providerStreams = validateMovieStreams(providerStreams, req.Title, releaseYear)
+			validated := validateMovieStreams(providerStreams, req.Title, releaseYear)
+			if len(validated) > 0 || len(providerStreams) == 0 {
+				providerStreams = validated
+			} else {
+				log.Printf("[Vortexo] Title validation removed all %d IMDb-matched streams for %q; keeping provider results", len(providerStreams), req.Title)
+			}
 		}
 	}
 	if err != nil {
@@ -177,6 +197,12 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	token.Hash = normalizeTorrentHash(token.Hash)
+	if isVortexoSourceBlocked(token.Hash) {
+		respondError(w, http.StatusGone, "Real-Debrid rejected source: infringing_file")
+		return
+	}
+
 	if h.rdClient == nil {
 		respondError(w, http.StatusServiceUnavailable, "Real-Debrid is not configured")
 		return
@@ -188,6 +214,11 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	streamURL, err := h.rdClient.GetStreamURLForFile(ctx, token.Hash, token.FileIdx, token.Title)
 	if err != nil {
 		log.Printf("[Vortexo] Failed to resolve source %q: %v", token.Title, err)
+		if isRealDebridBlockedPlaybackError(err) {
+			markVortexoSourceBlocked(token.Hash, "infringing_file")
+			respondError(w, http.StatusGone, safeVortexoPlaybackError(err))
+			return
+		}
 		respondError(w, http.StatusBadGateway, safeVortexoPlaybackError(err))
 		return
 	}
@@ -662,6 +693,10 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 		if !isValidHash(hash) && stream.URL != "" {
 			hash = extractHashFromURL(stream.URL)
 		}
+		hash = normalizeTorrentHash(hash)
+		if hash != "" && isVortexoSourceBlocked(hash) {
+			continue
+		}
 
 		token := vortexoPlayToken{
 			Hash:    hash,
@@ -715,6 +750,66 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 	}
 
 	return sources
+}
+
+func markVortexoSourceBlocked(hash, reason string) {
+	hash = normalizeTorrentHash(hash)
+	if !isValidHash(hash) {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "blocked"
+	}
+
+	vortexoBlockedSources.Lock()
+	vortexoBlockedSources.byHash[hash] = vortexoBlockedSource{
+		Reason:    reason,
+		ExpiresAt: time.Now().Add(vortexoBlockedSourceTTL),
+	}
+	vortexoBlockedSources.Unlock()
+}
+
+func isVortexoSourceBlocked(hash string) bool {
+	hash = normalizeTorrentHash(hash)
+	if !isValidHash(hash) {
+		return false
+	}
+
+	now := time.Now()
+	vortexoBlockedSources.RLock()
+	entry, ok := vortexoBlockedSources.byHash[hash]
+	vortexoBlockedSources.RUnlock()
+	if !ok {
+		return false
+	}
+	if now.Before(entry.ExpiresAt) {
+		return true
+	}
+
+	vortexoBlockedSources.Lock()
+	if current, exists := vortexoBlockedSources.byHash[hash]; exists && !now.Before(current.ExpiresAt) {
+		delete(vortexoBlockedSources.byHash, hash)
+	}
+	vortexoBlockedSources.Unlock()
+	return false
+}
+
+func isRealDebridBlockedPlaybackError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *services.RealDebridAPIError
+	if errors.As(err, &apiErr) {
+		name := strings.ToLower(strings.TrimSpace(apiErr.ErrorName))
+		if name == "infringing_file" || name == "infringing_torrent" {
+			return true
+		}
+		if strings.Contains(strings.ToLower(apiErr.Body), "infringing") {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "infringing_file")
 }
 
 func safeVortexoPlaybackError(err error) string {
