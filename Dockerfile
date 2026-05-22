@@ -62,7 +62,8 @@ RUN apt-get update && \
       rclone \
       tzdata \
       unzip \
-      wget && \
+      wget \
+      yt-dlp && \
     rm -rf /var/lib/apt/lists/*
 
 # Install zurg public binary used for the internal RD mount helper

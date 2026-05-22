@@ -241,6 +241,9 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	api.HandleFunc("/tmdb/tv/{id}/seasons", handler.GetTMDBTVSeasons).Methods("GET")
 	api.HandleFunc("/tmdb/tv/{id}/episodes", handler.GetTMDBTVEpisodes).Methods("GET")
 	api.HandleFunc("/tmdb/{type}/{id}", handler.GetTMDBDetails).Methods("GET")
+	api.HandleFunc("/trailers/{video_id}/play", handler.PlayTrailer).Methods("GET", "HEAD")
+	api.HandleFunc("/movies/{id}/videos/{video_id}/play", handler.PlayTrailer).Methods("GET", "HEAD")
+	api.HandleFunc("/series/{id}/videos/{video_id}/play", handler.PlayTrailer).Methods("GET", "HEAD")
 
 	// Discover / Trending
 	api.HandleFunc("/discover/trending", handler.GetTrending).Methods("GET")

@@ -1052,6 +1052,83 @@ func (h *Handler) GetMediaVideos(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, sortedVideos)
 }
 
+// PlayTrailer resolves a TMDB/YouTube trailer key to a direct media URL and redirects.
+func (h *Handler) PlayTrailer(w http.ResponseWriter, r *http.Request) {
+	videoID := cleanYouTubeVideoID(mux.Vars(r)["video_id"])
+	if videoID == "" {
+		respondError(w, http.StatusBadRequest, "invalid trailer id")
+		return
+	}
+
+	playURL, err := resolveYouTubeTrailerURL(r.Context(), videoID)
+	if err != nil {
+		log.Printf("Failed to resolve trailer %s: %v", videoID, err)
+		respondError(w, http.StatusServiceUnavailable, "failed to resolve trailer playback url")
+		return
+	}
+
+	http.Redirect(w, r, playURL, http.StatusFound)
+}
+
+func cleanYouTubeVideoID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, "youtube.com") || strings.Contains(value, "youtu.be") {
+		if parsed, err := http.NewRequest(http.MethodGet, value, nil); err == nil && parsed.URL != nil {
+			if id := strings.TrimSpace(parsed.URL.Query().Get("v")); id != "" {
+				value = id
+			} else if parts := strings.Split(strings.Trim(parsed.URL.Path, "/"), "/"); len(parts) > 0 {
+				value = parts[len(parts)-1]
+			}
+		}
+	}
+	value = strings.Trim(value, "/")
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func resolveYouTubeTrailerURL(ctx context.Context, videoID string) (string, error) {
+	if _, err := exec.LookPath("yt-dlp"); err != nil {
+		return "", fmt.Errorf("yt-dlp is not installed: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	watchURL := "https://www.youtube.com/watch?v=" + videoID
+	cmd := exec.CommandContext(
+		ctx,
+		"yt-dlp",
+		"--no-playlist",
+		"--no-warnings",
+		"--force-ipv4",
+		"-f",
+		"best[ext=mp4][height<=1080]/best[height<=1080]/best",
+		"-g",
+		watchURL,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("yt-dlp failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+			return line, nil
+		}
+	}
+	return "", fmt.Errorf("yt-dlp returned no playable url")
+}
+
 // GetMovieStreams handles GET /api/movies/{id}/streams
 func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -3701,7 +3778,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 	response := make(map[string]interface{})
 
 	if mediaType == "movie" {
-		movie, err := h.tmdbClient.GetMovie(ctx, tmdbID)
+		movie, collectionSummary, err := h.tmdbClient.GetMovieWithCollection(ctx, tmdbID)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "movie not found")
 			return
@@ -3736,6 +3813,23 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		response["backdrop_paths"] = backdropPaths
 		response["landscape_paths"] = landscapePaths
 		response["poster_paths"] = posterPaths
+
+		if collectionSummary != nil {
+			if collection, movies, err := h.tmdbClient.GetCollectionWithMovies(ctx, collectionSummary.TMDBID); err == nil && collection != nil {
+				response["collection"] = map[string]interface{}{
+					"id":            collection.ID,
+					"tmdb_id":       collection.TMDBID,
+					"name":          collection.Name,
+					"overview":      collection.Overview,
+					"poster_path":   collection.PosterPath,
+					"backdrop_path": collection.BackdropPath,
+					"total_movies":  collection.TotalMovies,
+					"movies":        movies,
+				}
+			} else if err != nil {
+				log.Printf("[TMDB] failed to fetch collection %d for movie %d: %v", collectionSummary.TMDBID, tmdbID, err)
+			}
+		}
 	} else if mediaType == "tv" {
 		series, err := h.tmdbClient.GetSeries(ctx, tmdbID)
 		if err != nil {

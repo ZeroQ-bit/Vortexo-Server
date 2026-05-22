@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -82,6 +83,12 @@ var xtreamMovieQualityVariants = []struct {
 	{Suffix: "2160p", Label: "4K", MaxResolution: 2160},
 	{Suffix: "1080p", Label: "1080P", MaxResolution: 1080},
 	{Suffix: "720p", Label: "720P", MaxResolution: 720},
+}
+
+type xtreamDirectSource struct {
+	Name    string
+	URL     string
+	Quality string
 }
 
 func NewXtreamHandler(cfg *config.Config, db *sql.DB, tmdb *services.TMDBClient, rdClient *services.RealDebridClient, channelManager *livetv.ChannelManager, epgManager *epg.Manager, stremioAddons []providers.StremioAddon, proxies []string) *XtreamHandler {
@@ -613,6 +620,32 @@ func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string
 	return 1
 }
 
+func writeMovieDirectSourcePlaylistEntries(w io.Writer, tmdbID int64, title, yearStr, logo string, sources []xtreamDirectSource, duplicate bool) int {
+	if len(sources) == 0 {
+		return 0
+	}
+
+	limit := 1
+	if duplicate {
+		limit = len(sources)
+	}
+
+	for i := 0; i < limit; i++ {
+		source := sources[i]
+		displayTitle := title + yearStr
+		tvgID := fmt.Sprintf("movie_%d", tmdbID)
+		if duplicate {
+			displayTitle = fmt.Sprintf("%s [%s]", displayTitle, source.Name)
+			tvgID = fmt.Sprintf("movie_%d_src_%d", tmdbID, i+1)
+		}
+		fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
+			tvgID, displayTitle, logo, displayTitle)
+		fmt.Fprintf(w, "%s\n", source.URL)
+	}
+
+	return limit
+}
+
 func movieFromXtreamRow(id, tmdbID int64, title string, year sql.NullInt64, metadata map[string]interface{}) *models.Movie {
 	movie := &models.Movie{
 		ID:       id,
@@ -676,6 +709,216 @@ func metadataHasVODSources(metadata map[string]interface{}) bool {
 	}
 	sources, ok := metadata["iptv_vod_sources"].([]interface{})
 	return ok && len(sources) > 0
+}
+
+func xtreamRequestBaseURL(r *http.Request, cfg *config.Config) string {
+	host := r.Host
+	if host == "" && cfg != nil {
+		host = fmt.Sprintf("%s:%d", cfg.Host, cfg.ServerPort)
+	}
+	if host == "" {
+		host = "localhost:8080"
+	}
+
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		scheme = strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+func xtreamRequestCredentials(r *http.Request) (string, string) {
+	username := r.URL.Query().Get("username")
+	password := r.URL.Query().Get("password")
+	if username == "" {
+		username = "user"
+	}
+	if password == "" {
+		password = "pass"
+	}
+	return username, password
+}
+
+func xtreamMoviePlaybackURL(serverURL, username, password string, streamID interface{}) string {
+	return fmt.Sprintf("%s/movie/%s/%s/%v.mp4",
+		strings.TrimRight(serverURL, "/"),
+		url.PathEscape(username),
+		url.PathEscape(password),
+		streamID,
+	)
+}
+
+func xtreamSeriesPlaybackURL(serverURL, username, password, episodeID string) string {
+	return fmt.Sprintf("%s/series/%s/%s/%s.mkv",
+		strings.TrimRight(serverURL, "/"),
+		url.PathEscape(username),
+		url.PathEscape(password),
+		url.PathEscape(episodeID),
+	)
+}
+
+func xtreamContainerExtension(rawURL, fallback string) string {
+	ext := ""
+	if parsed, err := url.Parse(rawURL); err == nil {
+		ext = strings.TrimPrefix(strings.ToLower(path.Ext(parsed.Path)), ".")
+	}
+	if ext == "" {
+		ext = strings.TrimPrefix(strings.ToLower(path.Ext(rawURL)), ".")
+	}
+
+	switch ext {
+	case "mp4", "mkv", "avi", "mov", "webm", "m3u8", "ts":
+		return ext
+	}
+	return fallback
+}
+
+func appendXtreamSource(entries []xtreamDirectSource, seen map[string]bool, name, rawURL, quality string) []xtreamDirectSource {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" || seen[rawURL] {
+		return entries
+	}
+	seen[rawURL] = true
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "VOD"
+	}
+	quality = strings.TrimSpace(quality)
+	if quality == "" {
+		quality = "VOD"
+	}
+
+	return append(entries, xtreamDirectSource{Name: name, URL: rawURL, Quality: quality})
+}
+
+func movieDirectSources(metadata map[string]interface{}) []xtreamDirectSource {
+	if metadata == nil {
+		return nil
+	}
+
+	entries := []xtreamDirectSource{}
+	seen := make(map[string]bool)
+
+	switch sources := metadata["iptv_vod_sources"].(type) {
+	case []interface{}:
+		for _, s := range sources {
+			if m, ok := s.(map[string]interface{}); ok {
+				name, _ := m["name"].(string)
+				rawURL, _ := m["url"].(string)
+				quality, _ := m["quality"].(string)
+				entries = appendXtreamSource(entries, seen, name, rawURL, quality)
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range sources {
+			name, _ := m["name"].(string)
+			rawURL, _ := m["url"].(string)
+			quality, _ := m["quality"].(string)
+			entries = appendXtreamSource(entries, seen, name, rawURL, quality)
+		}
+	}
+
+	switch sources := metadata["balkan_vod_streams"].(type) {
+	case []interface{}:
+		for _, s := range sources {
+			if m, ok := s.(map[string]interface{}); ok {
+				name, _ := m["name"].(string)
+				rawURL, _ := m["url"].(string)
+				quality, _ := m["quality"].(string)
+				entries = appendXtreamSource(entries, seen, name, rawURL, quality)
+			}
+		}
+	case []map[string]interface{}:
+		for _, m := range sources {
+			name, _ := m["name"].(string)
+			rawURL, _ := m["url"].(string)
+			quality, _ := m["quality"].(string)
+			entries = appendXtreamSource(entries, seen, name, rawURL, quality)
+		}
+	}
+
+	if rawURL, ok := metadata["url"].(string); ok {
+		entries = appendXtreamSource(entries, seen, "VOD", rawURL, "VOD")
+	}
+
+	return entries
+}
+
+func intFromMetadataValue(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		return int(n), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(n))
+		return parsed, err == nil
+	}
+	return 0, false
+}
+
+func episodeDirectSources(metadata map[string]interface{}, season, episode int) []xtreamDirectSource {
+	entries := movieDirectSources(metadata)
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		seen[entry.URL] = true
+	}
+
+	seasons, ok := metadata["balkan_vod_seasons"].([]interface{})
+	if !ok {
+		return entries
+	}
+
+	for _, seasonValue := range seasons {
+		seasonMap, ok := seasonValue.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		seasonNum, ok := intFromMetadataValue(seasonMap["number"])
+		if !ok || seasonNum != season {
+			continue
+		}
+		episodes, ok := seasonMap["episodes"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, episodeValue := range episodes {
+			episodeMap, ok := episodeValue.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			episodeNum, ok := intFromMetadataValue(episodeMap["episode"])
+			if !ok || episodeNum != episode {
+				continue
+			}
+			name, _ := episodeMap["title"].(string)
+			rawURL, _ := episodeMap["url"].(string)
+			quality, _ := episodeMap["quality"].(string)
+			entries = appendXtreamSource(entries, seen, name, rawURL, quality)
+		}
+	}
+
+	return entries
+}
+
+func xtreamVideoSources(sources []xtreamDirectSource) []map[string]interface{} {
+	videos := make([]map[string]interface{}, 0, len(sources))
+	for _, source := range sources {
+		videos = append(videos, map[string]interface{}{
+			"title":   source.Name,
+			"url":     source.URL,
+			"bitrate": 0,
+			"quality": source.Quality,
+		})
+	}
+	return videos
 }
 
 func (h *XtreamHandler) RegisterRoutes(r *mux.Router) {
@@ -938,6 +1181,8 @@ func (h *XtreamHandler) getVODCategories(w http.ResponseWriter, r *http.Request)
 func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 	// Get category_id filter from query params
 	categoryFilter := r.URL.Query().Get("category_id")
+	serverURL := xtreamRequestBaseURL(r, h.cfg)
+	username, password := xtreamRequestCredentials(r)
 
 	// Check if filtering by collection (col_XXXXX format)
 	var collectionTmdbID int64
@@ -1138,6 +1383,14 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 			addedInt = time.Now().Unix()
 		}
 
+		sourceEntries := movieDirectSources(metadata)
+		directSource := xtreamMoviePlaybackURL(serverURL, username, password, tmdbID)
+		containerExt := "mp4"
+		if len(sourceEntries) > 0 {
+			directSource = sourceEntries[0].URL
+			containerExt = xtreamContainerExtension(sourceEntries[0].URL, containerExt)
+		}
+
 		// IMPORTANT: Use TMDB ID as stream_id for playback
 		baseStream := map[string]interface{}{
 			"num":                 num,
@@ -1153,9 +1406,9 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 			"rating_5based":       rating / 2,
 			"category_id":         categoryID,
 			"category_ids":        categoryIDs,
-			"container_extension": "mp4",
+			"container_extension": containerExt,
 			"custom_sid":          "",
-			"direct_source":       "",
+			"direct_source":       directSource,
 			"plot":                plot,
 			"added":               addedInt,
 			"last_modified":       addedInt,
@@ -1183,21 +1436,14 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if dupEnabled {
-			if sources, ok := metadata["iptv_vod_sources"].([]interface{}); ok && len(sources) > 0 {
-				for _, s := range sources {
-					provName := "Source"
-					if sm, ok := s.(map[string]interface{}); ok {
-						if n, ok := sm["name"].(string); ok && n != "" {
-							provName = n
-						}
-					}
-					// Clone base stream map
-					stream := make(map[string]interface{}, len(baseStream))
-					for k, v := range baseStream {
-						stream[k] = v
-					}
-					stream["name"] = fmt.Sprintf("%s [%s]", title, provName)
+			if len(sourceEntries) > 0 {
+				for _, source := range sourceEntries {
+					stream := cloneXtreamMap(baseStream)
+					stream["name"] = fmt.Sprintf("%s [%s]", title, source.Name)
 					stream["title"] = stream["name"]
+					stream["direct_source"] = source.URL
+					stream["container_extension"] = xtreamContainerExtension(source.URL, containerExt)
+					stream["quality"] = source.Quality
 					stream["num"] = num
 					streams = append(streams, stream)
 					num++
@@ -1206,14 +1452,16 @@ func (h *XtreamHandler) getVODStreams(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if h.qualityVariantsEnabled() {
+		if h.qualityVariantsEnabled() && len(sourceEntries) == 0 {
 			for _, variant := range xtreamMovieQualityVariants {
 				stream := cloneXtreamMap(baseStream)
+				streamID := encodeMovieQualityStreamID(tmdbID, variant.Suffix)
 				displayName := fmt.Sprintf("%s [%s]", title, variant.Label)
-				stream["stream_id"] = encodeMovieQualityStreamID(tmdbID, variant.Suffix)
+				stream["stream_id"] = streamID
 				stream["name"] = displayName
 				stream["title"] = displayName
 				stream["quality"] = variant.Suffix
+				stream["direct_source"] = xtreamMoviePlaybackURL(serverURL, username, password, streamID)
 				stream["num"] = num
 				streams = append(streams, stream)
 				num++
@@ -1236,7 +1484,7 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmdbID, _, err := decodeMoviePlaybackID(vodID)
+	tmdbID, decodedQuality, err := decodeMoviePlaybackID(vodID)
 	if err != nil {
 		http.Error(w, "Invalid vod_id", http.StatusBadRequest)
 		return
@@ -1343,6 +1591,19 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch YouTube trailer from TMDB
 	youtubeTrailer := h.getYouTubeTrailer(tmdbID, "movie")
+	serverURL := xtreamRequestBaseURL(r, h.cfg)
+	username, password := xtreamRequestCredentials(r)
+	playbackStreamID := tmdbID
+	if decodedQuality != "" {
+		playbackStreamID = encodeMovieQualityStreamID(tmdbID, decodedQuality)
+	}
+	sourceEntries := movieDirectSources(metadata)
+	directSource := xtreamMoviePlaybackURL(serverURL, username, password, playbackStreamID)
+	containerExt := "mkv"
+	if len(sourceEntries) > 0 {
+		directSource = sourceEntries[0].URL
+		containerExt = xtreamContainerExtension(sourceEntries[0].URL, containerExt)
+	}
 
 	info := map[string]interface{}{
 		"info": map[string]interface{}{
@@ -1358,20 +1619,21 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 			"duration_secs":   runtime * 60,
 			"duration":        duration,
 			"cast":            castString,
-			"video":           []interface{}{},
+			"video":           xtreamVideoSources(sourceEntries),
 			"audio":           []interface{}{},
 			"bitrate":         0,
 			"backdrop_path":   []string{backdropPath},
 			"cover":           posterPath,
 		},
 		"movie_data": map[string]interface{}{
-			"stream_id":           tmdbID,
+			"stream_id":           playbackStreamID,
 			"name":                title,
 			"added":               time.Now().Unix(),
 			"category_id":         "999992",
-			"container_extension": "mkv",
+			"container_extension": containerExt,
 			"custom_sid":          imdbIDStr,
-			"direct_source":       "",
+			"direct_source":       directSource,
+			"stream_url":          directSource,
 		},
 	}
 
@@ -1731,6 +1993,8 @@ func (h *XtreamHandler) getSeriesInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	serverURL := xtreamRequestBaseURL(r, h.cfg)
+	username, password := xtreamRequestCredentials(r)
 
 	// If number_of_seasons is not in metadata, fetch from TMDB API
 	if numberOfSeasons == 0 {
@@ -1856,42 +2120,28 @@ func (h *XtreamHandler) getSeriesInfo(w http.ResponseWriter, r *http.Request) {
 				runtime = 45
 			}
 
-			// Use TMDB episode ID as the id (like PHP version)
-			// Build multiple video sources from metadata.iptv_vod_sources if present
-			videos := []map[string]interface{}{}
-			if sources, ok := metadata["iptv_vod_sources"].([]interface{}); ok {
-				for _, s := range sources {
-					if m, ok := s.(map[string]interface{}); ok {
-						title := "Source"
-						if n, ok := m["name"].(string); ok && n != "" {
-							title = n
-						}
-						if u, ok := m["url"].(string); ok && u != "" {
-							videos = append(videos, map[string]interface{}{
-								"title":   title,
-								"url":     u,
-								"bitrate": 0,
-								"quality": title,
-							})
-						}
-					}
-				}
+			episodeSources := episodeDirectSources(metadata, seasonNum, ep.EpisodeNumber)
+			directSource := xtreamSeriesPlaybackURL(serverURL, username, password, episodeIDStr)
+			containerExt := "mkv"
+			if len(episodeSources) > 0 {
+				directSource = episodeSources[0].URL
+				containerExt = xtreamContainerExtension(episodeSources[0].URL, containerExt)
 			}
 
 			info := map[string]interface{}{
 				"id":                  episodeIDStr,
 				"episode_num":         ep.EpisodeNumber,
 				"title":               fmt.Sprintf("%s - S%02dE%02d - %s", title, seasonNum, ep.EpisodeNumber, ep.Name),
-				"container_extension": "mkv",
+				"container_extension": containerExt,
 				"custom_sid":          customSid,
 				"added":               "",
 				"season":              seasonNum,
-				"direct_source":       "",
+				"direct_source":       directSource,
 				"info": map[string]interface{}{
 					"tmdb_id":       fmt.Sprintf("%d", tmdbID),
 					"name":          ep.Name,
 					"air_date":      ep.AirDate,
-					"video":         videos,
+					"video":         xtreamVideoSources(episodeSources),
 					"cover_big":     episodeImage,
 					"plot":          ep.Overview,
 					"movie_image":   episodeImage,
@@ -2421,14 +2671,23 @@ func (h *XtreamHandler) playMovieWithQuality(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		metadata = map[string]interface{}{}
+	}
+
+	if sourceEntries := movieDirectSources(metadata); len(sourceEntries) > 0 {
+		elapsed := time.Since(startTime)
+		log.Printf("[PLAY] Redirecting to stored VOD movie source (%.2fs): %s", elapsed.Seconds(), sourceEntries[0].URL)
+		http.Redirect(w, r, sourceEntries[0].URL, http.StatusFound)
+		return
+	}
+
 	// If imdb_id column is empty, try to get from metadata JSON
 	if !imdbID.Valid || imdbID.String == "" {
-		var metadata map[string]interface{}
-		if json.Unmarshal(metadataJSON, &metadata) == nil {
-			if id, ok := metadata["imdb_id"].(string); ok && id != "" {
-				imdbID.String = id
-				imdbID.Valid = true
-			}
+		if id, ok := metadata["imdb_id"].(string); ok && id != "" {
+			imdbID.String = id
+			imdbID.Valid = true
 		}
 	}
 
@@ -2512,22 +2771,30 @@ func (h *XtreamHandler) playEpisode(w http.ResponseWriter, r *http.Request, seri
 		}
 	}
 
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(metadataJSON, &metadata); err != nil {
+		metadata = map[string]interface{}{}
+	}
+
+	if sourceEntries := episodeDirectSources(metadata, seasonNum, episodeNum); len(sourceEntries) > 0 {
+		log.Printf("Redirecting to stored VOD episode source: %s", sourceEntries[0].URL)
+		http.Redirect(w, r, sourceEntries[0].URL, http.StatusFound)
+		return
+	}
+
 	// If imdb_id column is empty, try to get from metadata JSON
 	if !imdbID.Valid || imdbID.String == "" {
-		var metadata map[string]interface{}
-		if json.Unmarshal(metadataJSON, &metadata) == nil {
-			// Try external_ids first, then imdb_id directly
-			if extIds, ok := metadata["external_ids"].(map[string]interface{}); ok {
-				if id, ok := extIds["imdb_id"].(string); ok && id != "" {
-					imdbID.String = id
-					imdbID.Valid = true
-				}
+		// Try external_ids first, then imdb_id directly
+		if extIds, ok := metadata["external_ids"].(map[string]interface{}); ok {
+			if id, ok := extIds["imdb_id"].(string); ok && id != "" {
+				imdbID.String = id
+				imdbID.Valid = true
 			}
-			if !imdbID.Valid {
-				if id, ok := metadata["imdb_id"].(string); ok && id != "" {
-					imdbID.String = id
-					imdbID.Valid = true
-				}
+		}
+		if !imdbID.Valid {
+			if id, ok := metadata["imdb_id"].(string); ok && id != "" {
+				imdbID.String = id
+				imdbID.Valid = true
 			}
 		}
 	}
@@ -2660,6 +2927,11 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
 				}
 
+				if sourceEntries := movieDirectSources(metadata); len(sourceEntries) > 0 {
+					cachedCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider())
+					continue
+				}
+
 				cachedCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
 			}
 			log.Printf("[XTREAM] handleGetPlaylist: Added %d cached movie streams to playlist", cachedCount)
@@ -2766,6 +3038,11 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 				yearStr := ""
 				if year.Valid {
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
+				}
+
+				if sourceEntries := movieDirectSources(metadata); len(sourceEntries) > 0 {
+					totalCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider())
+					continue
 				}
 
 				totalCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
