@@ -3717,6 +3717,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		}
 		logoPaths := appendUniqueStrings(fanart.LogoPaths, tmdbLogoPath)
 		backdropPaths := appendUniqueStrings(fanart.BackdropPaths, movie.BackdropPath)
+		landscapePaths := appendUniqueStrings(fanart.LandscapePaths)
 		posterPaths := appendUniqueStrings(fanart.PosterPaths, movie.PosterPath)
 
 		response["id"] = movie.TMDBID
@@ -3733,6 +3734,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		}
 		response["logo_paths"] = logoPaths
 		response["backdrop_paths"] = backdropPaths
+		response["landscape_paths"] = landscapePaths
 		response["poster_paths"] = posterPaths
 	} else if mediaType == "tv" {
 		series, err := h.tmdbClient.GetSeries(ctx, tmdbID)
@@ -3756,6 +3758,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		}
 		logoPaths := appendUniqueStrings(fanart.LogoPaths, tmdbLogoPath)
 		backdropPaths := appendUniqueStrings(fanart.BackdropPaths, series.BackdropPath)
+		landscapePaths := appendUniqueStrings(fanart.LandscapePaths)
 		posterPaths := appendUniqueStrings(fanart.PosterPaths, series.PosterPath)
 
 		response["id"] = series.TMDBID
@@ -3772,6 +3775,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 		}
 		response["logo_paths"] = logoPaths
 		response["backdrop_paths"] = backdropPaths
+		response["landscape_paths"] = landscapePaths
 		response["poster_paths"] = posterPaths
 	} else {
 		respondError(w, http.StatusBadRequest, "invalid media type, must be 'movie' or 'tv'")
@@ -3787,6 +3791,112 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, response)
+}
+
+// GetTMDBTVSeasons handles GET /api/tmdb/tv/{id}/seasons.
+func (h *Handler) GetTMDBTVSeasons(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tmdbID, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid TMDB ID")
+		return
+	}
+
+	series, err := h.tmdbClient.GetSeries(ctx, tmdbID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "series not found")
+		return
+	}
+
+	type seasonResponse struct {
+		ID           int    `json:"id"`
+		SeasonNumber int    `json:"season_number"`
+		Name         string `json:"name"`
+		Overview     string `json:"overview"`
+		PosterPath   string `json:"poster_path"`
+		AirDate      string `json:"air_date"`
+		EpisodeCount int    `json:"episode_count"`
+	}
+
+	seasons := make([]seasonResponse, 0, series.Seasons)
+	for seasonNumber := 1; seasonNumber <= series.Seasons; seasonNumber++ {
+		season, err := h.tmdbClient.GetSeason(ctx, tmdbID, seasonNumber)
+		if err != nil {
+			log.Printf("[TMDB] failed to fetch tv %d season %d: %v", tmdbID, seasonNumber, err)
+			continue
+		}
+
+		episodeCount := season.EpisodeCount
+		if episodeCount == 0 {
+			episodeCount = len(season.Episodes)
+		}
+
+		seasons = append(seasons, seasonResponse{
+			ID:           season.ID,
+			SeasonNumber: season.SeasonNumber,
+			Name:         season.Name,
+			Overview:     season.Overview,
+			PosterPath:   season.PosterPath,
+			AirDate:      season.AirDate,
+			EpisodeCount: episodeCount,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"seasons": seasons})
+}
+
+// GetTMDBTVEpisodes handles GET /api/tmdb/tv/{id}/episodes.
+func (h *Handler) GetTMDBTVEpisodes(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tmdbID, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid TMDB ID")
+		return
+	}
+
+	series, err := h.tmdbClient.GetSeries(ctx, tmdbID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "series not found")
+		return
+	}
+
+	type episodeResponse struct {
+		ID            string  `json:"id"`
+		TMDBID        int     `json:"tmdb_id"`
+		Title         string  `json:"title"`
+		Overview      string  `json:"overview"`
+		StillPath     string  `json:"still_path"`
+		SeasonNumber  int     `json:"season_number"`
+		EpisodeNumber int     `json:"episode_number"`
+		Runtime       int     `json:"runtime"`
+		AirDate       string  `json:"air_date"`
+		VoteAverage   float64 `json:"vote_average"`
+	}
+
+	result := make([]episodeResponse, 0)
+	for seasonNumber := 1; seasonNumber <= series.Seasons; seasonNumber++ {
+		season, err := h.tmdbClient.GetSeason(ctx, tmdbID, seasonNumber)
+		if err != nil {
+			log.Printf("[TMDB] failed to fetch tv %d season %d episodes: %v", tmdbID, seasonNumber, err)
+			continue
+		}
+		for _, episode := range season.Episodes {
+			result = append(result, episodeResponse{
+				ID:            strconv.Itoa(episode.ID),
+				TMDBID:        episode.ID,
+				Title:         episode.Name,
+				Overview:      episode.Overview,
+				StillPath:     episode.StillPath,
+				SeasonNumber:  episode.SeasonNumber,
+				EpisodeNumber: episode.EpisodeNumber,
+				Runtime:       episode.Runtime,
+				AirDate:       episode.AirDate,
+				VoteAverage:   episode.VoteAverage,
+			})
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"episodes": result})
 }
 
 // GetPopularCollections handles GET /api/discover/collections - get popular collections from TMDB

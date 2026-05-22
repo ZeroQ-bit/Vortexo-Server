@@ -168,9 +168,10 @@ type tmdbImagesResponse struct {
 }
 
 type FanartArtwork struct {
-	LogoPaths     []string `json:"logo_paths"`
-	BackdropPaths []string `json:"backdrop_paths"`
-	PosterPaths   []string `json:"poster_paths"`
+	LogoPaths      []string `json:"logo_paths"`
+	BackdropPaths  []string `json:"backdrop_paths"`
+	LandscapePaths []string `json:"landscape_paths"`
+	PosterPaths    []string `json:"poster_paths"`
 }
 
 type fanartImageCandidate struct {
@@ -593,11 +594,13 @@ func (c *TMDBClient) GetFanartArtwork(
 
 	if strings.EqualFold(mediaType, "movie") {
 		artwork.LogoPaths = fanartURLs(raw, []string{"hdmovielogo", "movielogo"})
-		artwork.BackdropPaths = fanartURLs(raw, []string{"moviebackground", "moviethumb"})
+		artwork.BackdropPaths = fanartURLs(raw, []string{"moviebackground"})
+		artwork.LandscapePaths = fanartURLs(raw, []string{"moviethumb"})
 		artwork.PosterPaths = fanartURLs(raw, []string{"movieposter"})
 	} else {
 		artwork.LogoPaths = fanartURLs(raw, []string{"hdtvlogo", "clearlogo"})
-		artwork.BackdropPaths = fanartURLs(raw, []string{"showbackground", "tvthumb"})
+		artwork.BackdropPaths = fanartURLs(raw, []string{"showbackground"})
+		artwork.LandscapePaths = fanartURLs(raw, []string{"tvthumb"})
 		artwork.PosterPaths = fanartURLs(raw, []string{"tvposter"})
 	}
 
