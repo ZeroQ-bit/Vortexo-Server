@@ -69,6 +69,7 @@ type tmdbMovie struct {
 	Status              string                   `json:"status"`
 	IMDbID              string                   `json:"imdb_id"`
 	BelongsToCollection *tmdbBelongsToCollection `json:"belongs_to_collection"`
+	Keywords            tmdbMovieKeywords        `json:"keywords"`
 }
 
 type DiscoverMovieFilters struct {
@@ -121,8 +122,22 @@ type tmdbSeries struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	} `json:"genres"`
-	VoteAverage float64 `json:"vote_average"`
-	VoteCount   int     `json:"vote_count"`
+	VoteAverage float64            `json:"vote_average"`
+	VoteCount   int                `json:"vote_count"`
+	Keywords    tmdbSeriesKeywords `json:"keywords"`
+}
+
+type tmdbKeyword struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type tmdbMovieKeywords struct {
+	Keywords []tmdbKeyword `json:"keywords"`
+}
+
+type tmdbSeriesKeywords struct {
+	Results []tmdbKeyword `json:"results"`
 }
 
 type tmdbSeason struct {
@@ -174,6 +189,24 @@ type FanartArtwork struct {
 	PosterPaths    []string `json:"poster_paths"`
 }
 
+func tmdbKeywordNames(keywords []tmdbKeyword) []string {
+	names := make([]string, 0, len(keywords))
+	seen := make(map[string]bool, len(keywords))
+	for _, keyword := range keywords {
+		name := strings.TrimSpace(keyword.Name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		names = append(names, name)
+	}
+	return names
+}
+
 type fanartImageCandidate struct {
 	URL   string
 	Lang  string
@@ -185,6 +218,7 @@ func (c *TMDBClient) GetMovie(ctx context.Context, tmdbID int) (*models.Movie, e
 	endpoint := fmt.Sprintf("%s/movie/%d", tmdbBaseURL, tmdbID)
 	params := url.Values{}
 	params.Set("api_key", c.apiKey)
+	params.Set("append_to_response", "keywords")
 
 	data, err := c.makeRequest(ctx, endpoint, params)
 	if err != nil {
@@ -204,6 +238,7 @@ func (c *TMDBClient) GetMovieWithCollection(ctx context.Context, tmdbID int) (*m
 	endpoint := fmt.Sprintf("%s/movie/%d", tmdbBaseURL, tmdbID)
 	params := url.Values{}
 	params.Set("api_key", c.apiKey)
+	params.Set("append_to_response", "keywords")
 
 	data, err := c.makeRequest(ctx, endpoint, params)
 	if err != nil {
@@ -394,6 +429,7 @@ func (c *TMDBClient) GetSeries(ctx context.Context, tmdbID int) (*models.Series,
 	endpoint := fmt.Sprintf("%s/tv/%d", tmdbBaseURL, tmdbID)
 	params := url.Values{}
 	params.Set("api_key", c.apiKey)
+	params.Set("append_to_response", "keywords")
 
 	data, err := c.makeRequest(ctx, endpoint, params)
 	if err != nil {
@@ -994,6 +1030,7 @@ func (c *TMDBClient) convertMovie(tm *tmdbMovie) *models.Movie {
 			"imdb_id":           tm.IMDbID,
 			"adult":             tm.Adult,
 			"genre_ids":         tm.GenreIDs,
+			"keywords":          tmdbKeywordNames(tm.Keywords.Keywords),
 			"release_date":      tm.ReleaseDate,
 			"runtime":           tm.Runtime,
 			"original_language": tm.OriginalLanguage,
@@ -1039,6 +1076,7 @@ func (c *TMDBClient) convertSeries(ts *tmdbSeries) *models.Series {
 		Metadata: models.Metadata{
 			"vote_average":      ts.VoteAverage,
 			"vote_count":        ts.VoteCount,
+			"keywords":          tmdbKeywordNames(ts.Keywords.Results),
 			"original_language": ts.OriginalLanguage,
 			"origin_country":    ts.OriginCountry,
 		},

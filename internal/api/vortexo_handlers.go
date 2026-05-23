@@ -105,6 +105,7 @@ type libreTranslateResponse struct {
 func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"name":                          "Vortexo Server Sources",
+		"home":                          true,
 		"source_api":                    true,
 		"playback":                      true,
 		"subtitles":                     true,
