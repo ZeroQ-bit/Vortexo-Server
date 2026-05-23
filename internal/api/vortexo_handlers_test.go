@@ -115,6 +115,47 @@ func TestBuildVortexoSourcesPrefersDirectURLWhenHashPresent(t *testing.T) {
 	}
 }
 
+func TestFilterVortexoMovieStreamsRejectsAdultAndLooseTitleMatches(t *testing.T) {
+	streams := []providers.TorrentioStream{
+		{Title: "Normal 2025 2160p AMZN WEB-DL DD+ 5.1 H.265-SCOPE", Name: "Normal 2025", Source: "DMM"},
+		{Title: "Blacked 20 11 14 Little Caprice The New Normal XXX 2160p MP4 P2", Name: "Blacked", Source: "DMM"},
+		{Title: "Normal People - Season 1 - Mp4 x264 AC3 1080p", Name: "Normal People", Source: "DMM"},
+		{Title: "A Normal Woman", Name: "A Normal Woman", Source: "DMM"},
+	}
+
+	filtered := filterVortexoMovieStreams(streams, "Normal", 2026)
+	if len(filtered) != 1 {
+		t.Fatalf("filterVortexoMovieStreams kept %d streams, want 1: %#v", len(filtered), filtered)
+	}
+	if filtered[0].Title != streams[0].Title {
+		t.Fatalf("filterVortexoMovieStreams kept %q, want %q", filtered[0].Title, streams[0].Title)
+	}
+}
+
+func TestApplyVortexoCacheAvailabilityOverridesProviderCachedFlag(t *testing.T) {
+	const unavailableHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const cachedHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	streams := []providers.TorrentioStream{
+		{Title: "Normal 2026 2160p", InfoHash: unavailableHash, Cached: true, Source: "DMM"},
+		{Title: "Normal 2026 1080p", InfoHash: cachedHash, Cached: false, Source: "DMM"},
+	}
+
+	filtered := applyVortexoCacheAvailability(streams, map[string]bool{
+		unavailableHash: false,
+		cachedHash:      true,
+	}, true, true)
+
+	if len(filtered) != 1 {
+		t.Fatalf("applyVortexoCacheAvailability kept %d streams, want 1: %#v", len(filtered), filtered)
+	}
+	if filtered[0].InfoHash != cachedHash {
+		t.Fatalf("kept hash = %q, want %q", filtered[0].InfoHash, cachedHash)
+	}
+	if !filtered[0].Cached {
+		t.Fatal("expected kept stream to be marked cached")
+	}
+}
+
 func TestWantsVortexoPlayJSON(t *testing.T) {
 	req, err := http.NewRequest("GET", "/api/v1/vortexo/play/token", nil)
 	if err != nil {

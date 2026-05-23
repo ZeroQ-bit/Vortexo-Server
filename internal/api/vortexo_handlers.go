@@ -153,12 +153,15 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 	} else {
 		providerStreams, err = h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
 		if err == nil && req.Title != "" {
-			validated := validateMovieStreams(providerStreams, req.Title, releaseYear)
-			if len(validated) > 0 || len(providerStreams) == 0 {
-				providerStreams = validated
-			} else {
-				log.Printf("[Vortexo] Title validation removed all %d IMDb-matched streams for %q; keeping provider results", len(providerStreams), req.Title)
+			filtered := filterVortexoMovieStreams(providerStreams, req.Title, releaseYear)
+			if len(filtered) == 0 && releaseYear > 0 {
+				if fallbackStreams, fallbackErr := h.streamProvider.GetMovieStreams(imdbID); fallbackErr == nil {
+					filtered = filterVortexoMovieStreams(fallbackStreams, req.Title, releaseYear)
+				} else {
+					log.Printf("[Vortexo] Fallback movie stream lookup failed for %s: %v", imdbID, fallbackErr)
+				}
 			}
+			providerStreams = filtered
 		}
 	}
 	if err != nil {
@@ -170,6 +173,12 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	providerStreams = h.refreshVortexoCacheAvailability(
+		r.Context(),
+		providerStreams,
+		h.vortexoOnlyCachedSourcesEnabled(),
+	)
 
 	sources := h.buildVortexoSources(providerStreams, req)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -678,6 +687,200 @@ func normalizeVortexoLookupTitle(value string) string {
 		".", " ",
 	)
 	return strings.Join(strings.Fields(strings.ToLower(replacer.Replace(strings.TrimSpace(value)))), " ")
+}
+
+func filterVortexoMovieStreams(streams []providers.TorrentioStream, title string, year int) []providers.TorrentioStream {
+	if len(streams) == 0 {
+		return streams
+	}
+
+	filtered := make([]providers.TorrentioStream, 0, len(streams))
+	for _, stream := range streams {
+		if vortexoStreamLooksAdult(stream) {
+			log.Printf("[Vortexo] Filtered adult-looking source for %q: %s", title, firstNonEmpty(stream.Title, stream.Name))
+			continue
+		}
+		if !vortexoMovieStreamMatchesTitle(stream, title, year) {
+			log.Printf("[Vortexo] Filtered title mismatch for %q (%d): %s", title, year, firstNonEmpty(stream.Title, stream.Name))
+			continue
+		}
+		filtered = append(filtered, stream)
+	}
+
+	if len(filtered) != len(streams) {
+		log.Printf("[Vortexo] Movie source filter kept %d/%d streams for %q (%d)", len(filtered), len(streams), title, year)
+	}
+	return filtered
+}
+
+func vortexoMovieStreamMatchesTitle(stream providers.TorrentioStream, title string, year int) bool {
+	requested := normalizeVortexoLookupTitle(title)
+	if requested == "" {
+		return true
+	}
+
+	candidate := normalizeVortexoLookupTitle(firstNonEmpty(stream.Title, stream.Name, stream.BehaviorHints.Filename))
+	if candidate == "" {
+		return false
+	}
+	if candidate == requested {
+		return true
+	}
+
+	requestedTokens := strings.Fields(requested)
+	if len(requestedTokens) == 1 {
+		if year > 0 {
+			for _, acceptedYear := range vortexoAcceptedMovieYears(year) {
+				if strings.HasPrefix(candidate, fmt.Sprintf("%s %d ", requested, acceptedYear)) {
+					return true
+				}
+			}
+			return false
+		}
+		return strings.HasPrefix(candidate, requested+" ")
+	}
+
+	if strings.HasPrefix(candidate, requested+" ") {
+		return true
+	}
+	if year > 0 {
+		for _, acceptedYear := range vortexoAcceptedMovieYears(year) {
+			if strings.HasPrefix(candidate, fmt.Sprintf("%s %d ", requested, acceptedYear)) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func vortexoAcceptedMovieYears(year int) []int {
+	if year <= 0 {
+		return nil
+	}
+	return []int{year, year - 1, year + 1}
+}
+
+func vortexoStreamLooksAdult(stream providers.TorrentioStream) bool {
+	text := " " + normalizeVortexoLookupTitle(strings.Join([]string{
+		stream.Title,
+		stream.Name,
+		stream.BehaviorHints.Filename,
+		stream.Source,
+	}, " ")) + " "
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+
+	adultTerms := []string{
+		" xxx ",
+		" porn ",
+		" adult ",
+		" onlyfans ",
+		" deepthroat ",
+		" blowjob ",
+		" brazzers ",
+		" bangbros ",
+		" blacked ",
+		" anal ",
+		" hentai ",
+		" jav ",
+	}
+	for _, term := range adultTerms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (h *Handler) vortexoOnlyCachedSourcesEnabled() bool {
+	if h == nil || h.settingsManager == nil {
+		return false
+	}
+	cfg := h.settingsManager.Get()
+	return cfg.OnlyCachedStreams || cfg.CometOnlyShowCached
+}
+
+func (h *Handler) refreshVortexoCacheAvailability(ctx context.Context, streams []providers.TorrentioStream, onlyCached bool) []providers.TorrentioStream {
+	if len(streams) == 0 {
+		return streams
+	}
+
+	hashes := make([]string, 0, len(streams))
+	seenHashes := make(map[string]bool)
+	for _, stream := range streams {
+		if directVortexoPlaybackURL(stream.URL) != "" {
+			continue
+		}
+		hash := vortexoStreamHash(stream)
+		if hash == "" || seenHashes[hash] {
+			continue
+		}
+		seenHashes[hash] = true
+		hashes = append(hashes, hash)
+	}
+
+	availability := map[string]bool{}
+	verified := false
+	if len(hashes) > 0 && h != nil && h.rdClient != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		result, err := h.rdClient.CheckInstantAvailability(checkCtx, hashes)
+		cancel()
+		if err != nil {
+			log.Printf("[Vortexo] Real-Debrid cached-only availability check failed: %v", err)
+		} else {
+			availability = result
+			verified = true
+		}
+	} else if len(hashes) > 0 && onlyCached {
+		log.Printf("[Vortexo] Cached-only filtering requested but Real-Debrid client is unavailable; using provider cache markers")
+	}
+
+	filtered := applyVortexoCacheAvailability(streams, availability, verified, onlyCached)
+	if onlyCached && len(filtered) != len(streams) {
+		log.Printf("[Vortexo] Cached-only filter kept %d/%d streams", len(filtered), len(streams))
+	}
+	return filtered
+}
+
+func applyVortexoCacheAvailability(
+	streams []providers.TorrentioStream,
+	availability map[string]bool,
+	verified bool,
+	onlyCached bool,
+) []providers.TorrentioStream {
+	refreshed := make([]providers.TorrentioStream, 0, len(streams))
+	for _, stream := range streams {
+		if directVortexoPlaybackURL(stream.URL) != "" {
+			stream.Cached = true
+		} else if hash := vortexoStreamHash(stream); hash != "" {
+			if cached, ok := availability[hash]; ok {
+				stream.Cached = cached
+			} else if verified {
+				stream.Cached = false
+			}
+		}
+
+		if onlyCached && !stream.Cached {
+			continue
+		}
+		refreshed = append(refreshed, stream)
+	}
+	return refreshed
+}
+
+func vortexoStreamHash(stream providers.TorrentioStream) string {
+	hash := normalizeTorrentHash(stream.InfoHash)
+	if !isValidHash(hash) && stream.URL != "" {
+		hash = extractHashFromURL(stream.URL)
+	}
+	hash = normalizeTorrentHash(hash)
+	if !isValidHash(hash) {
+		return ""
+	}
+	return hash
 }
 
 func firstNonZero(values ...int) int {
