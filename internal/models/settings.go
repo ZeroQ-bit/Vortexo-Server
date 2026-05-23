@@ -14,11 +14,13 @@ type Settings struct {
 // SettingsResponse is the full settings object returned to the frontend
 type SettingsResponse struct {
 	// API Keys
-	TMDBAPIKey       string `json:"tmdb_api_key"`
-	FanartTVAPIKey   string `json:"fanart_tv_api_key"`
-	RealDebridToken  string `json:"realdebrid_token"`
-	PremiumizeAPIKey string `json:"premiumize_api_key"`
-	MDBListAPIKey    string `json:"mdblist_api_key"`
+	TMDBAPIKey        string `json:"tmdb_api_key"`
+	FanartTVAPIKey    string `json:"fanart_tv_api_key"`
+	RealDebridToken   string `json:"realdebrid_token"`
+	PremiumizeAPIKey  string `json:"premiumize_api_key"`
+	MDBListAPIKey     string `json:"mdblist_api_key"`
+	TraktClientID     string `json:"trakt_client_id"`
+	TraktClientSecret string `json:"trakt_client_secret"`
 
 	// OpenSubtitles
 	OpenSubtitlesEnabled   bool   `json:"opensubtitles_enabled"`

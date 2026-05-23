@@ -63,6 +63,7 @@ type Handler struct {
 	streamStore         *database.StreamStore
 	settingsStore       *database.SettingsStore
 	userStore           *database.UserStore
+	traktStore          *database.TraktStore
 	collectionStore     *database.CollectionStore
 	blacklistStore      *database.BlacklistStore
 	tmdbClient          *services.TMDBClient
@@ -257,6 +258,7 @@ func NewHandler(
 	streamStore *database.StreamStore,
 	settingsStore *database.SettingsStore,
 	userStore *database.UserStore,
+	traktStore *database.TraktStore,
 	collectionStore *database.CollectionStore,
 	tmdbClient *services.TMDBClient,
 	rdClient *services.RealDebridClient,
@@ -267,6 +269,8 @@ func NewHandler(
 		episodeStore:    episodeStore,
 		streamStore:     streamStore,
 		settingsStore:   settingsStore,
+		userStore:       userStore,
+		traktStore:      traktStore,
 		collectionStore: collectionStore,
 		tmdbClient:      tmdbClient,
 		rdClient:        rdClient,
@@ -280,6 +284,7 @@ func NewHandlerWithComponents(
 	streamStore *database.StreamStore,
 	settingsStore *database.SettingsStore,
 	userStore *database.UserStore,
+	traktStore *database.TraktStore,
 	collectionStore *database.CollectionStore,
 	blacklistStore *database.BlacklistStore,
 	tmdbClient *services.TMDBClient,
@@ -302,6 +307,7 @@ func NewHandlerWithComponents(
 		streamStore:         streamStore,
 		settingsStore:       settingsStore,
 		userStore:           userStore,
+		traktStore:          traktStore,
 		collectionStore:     collectionStore,
 		blacklistStore:      blacklistStore,
 		tmdbClient:          tmdbClient,
@@ -3136,6 +3142,14 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 		// Get old settings to detect changes
 		oldSettings := h.settingsManager.Get()
+		if oldSettings != nil {
+			if strings.TrimSpace(newSettings.TraktClientID) == "" {
+				newSettings.TraktClientID = oldSettings.TraktClientID
+			}
+			if strings.TrimSpace(newSettings.TraktClientSecret) == "" {
+				newSettings.TraktClientSecret = oldSettings.TraktClientSecret
+			}
+		}
 
 		if err := h.settingsManager.Update(&newSettings); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to update settings")

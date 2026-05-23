@@ -58,12 +58,14 @@ type Settings struct {
 	RedisURL    string `json:"redis_url"`
 
 	// API Keys
-	TMDBAPIKey       string `json:"tmdb_api_key"`
-	FanartTVAPIKey   string `json:"fanart_tv_api_key"`
-	RealDebridAPIKey string `json:"realdebrid_api_key"`
-	PremiumizeAPIKey string `json:"premiumize_api_key"`
-	MDBListAPIKey    string `json:"mdblist_api_key"`
-	MDBListLists     string `json:"mdblist_lists"`
+	TMDBAPIKey        string `json:"tmdb_api_key"`
+	FanartTVAPIKey    string `json:"fanart_tv_api_key"`
+	RealDebridAPIKey  string `json:"realdebrid_api_key"`
+	PremiumizeAPIKey  string `json:"premiumize_api_key"`
+	MDBListAPIKey     string `json:"mdblist_api_key"`
+	MDBListLists      string `json:"mdblist_lists"`
+	TraktClientID     string `json:"trakt_client_id"`
+	TraktClientSecret string `json:"trakt_client_secret"`
 
 	// Subtitle Translation
 	SubtitleTranslationAPIURL string `json:"subtitle_translation_api_url"`
@@ -667,6 +669,8 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"realdebrid_token":                    m.settings.RealDebridAPIKey,
 		"premiumize_api_key":                  m.settings.PremiumizeAPIKey,
 		"mdblist_api_key":                     m.settings.MDBListAPIKey,
+		"trakt_client_id":                     m.settings.TraktClientID,
+		"trakt_client_secret":                 m.settings.TraktClientSecret,
 		"subtitle_translation_api_url":        m.settings.SubtitleTranslationAPIURL,
 		"subtitle_translation_api_key":        m.settings.SubtitleTranslationAPIKey,
 		"opensubtitles_enabled":               m.settings.OpenSubtitlesEnabled,
@@ -737,6 +741,12 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["mdblist_api_key"].(string); ok {
 		m.settings.MDBListAPIKey = v
+	}
+	if v, ok := updates["trakt_client_id"].(string); ok {
+		m.settings.TraktClientID = v
+	}
+	if v, ok := updates["trakt_client_secret"].(string); ok {
+		m.settings.TraktClientSecret = v
 	}
 	if v, ok := updates["subtitle_translation_api_url"].(string); ok {
 		m.settings.SubtitleTranslationAPIURL = v

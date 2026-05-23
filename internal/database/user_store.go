@@ -261,7 +261,7 @@ func (s *UserStore) GetAllUsers() ([]map[string]interface{}, error) {
 // UpdateUser updates user fields
 func (s *UserStore) UpdateUser(userID int, updates map[string]interface{}) error {
 	allowedFields := []string{"username", "email", "role", "password_hash", "profile_picture"}
-	
+
 	query := "UPDATE users SET "
 	args := []interface{}{}
 	argPos := 1
@@ -372,6 +372,34 @@ func (s *UserStore) AddWatchHistory(userID, streamID int, title, mediaType strin
 	return err
 }
 
+func (s *UserStore) UpsertImportedWatchHistory(userID, streamID int, title, mediaType string, progress, duration int, watchedAt time.Time) error {
+	result, err := s.db.Exec(`
+		UPDATE user_history
+		SET
+			title = $3,
+			progress = GREATEST(progress, $5),
+			duration = GREATEST(duration, $6),
+			watched_at = GREATEST(watched_at, $7)
+		WHERE user_id = $1 AND stream_id = $2 AND type = $4
+	`, userID, streamID, title, mediaType, progress, duration, watchedAt)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		return nil
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO user_history (user_id, stream_id, title, type, progress, duration, watched_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, userID, streamID, title, mediaType, progress, duration, watchedAt)
+	return err
+}
+
 func (s *UserStore) GetWatchHistory(userID, limit int) ([]WatchHistory, error) {
 	rows, err := s.db.Query(`
 		SELECT id, user_id, stream_id, title, type, progress, duration, watched_at
@@ -441,7 +469,7 @@ func (s *UserStore) AddToPlaylist(playlistID, streamID int) error {
 	// Get next position
 	var maxPos sql.NullInt64
 	s.db.QueryRow("SELECT MAX(position) FROM playlist_items WHERE playlist_id = $1", playlistID).Scan(&maxPos)
-	
+
 	nextPos := 0
 	if maxPos.Valid {
 		nextPos = int(maxPos.Int64) + 1

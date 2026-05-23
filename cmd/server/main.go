@@ -97,6 +97,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize user store: %v", err)
 	}
+	traktStore, err := database.NewTraktStore(db)
+	if err != nil {
+		log.Fatalf("Failed to initialize Trakt store: %v", err)
+	}
 
 	// Initialize Phase 1 stream cache store
 	streamCacheStore := database.NewStreamCacheStore(db)
@@ -896,6 +900,7 @@ func main() {
 		streamStore,
 		settingsStore,
 		userStore,
+		traktStore,
 		collectionStore,
 		blacklistStore,
 		tmdbClient,

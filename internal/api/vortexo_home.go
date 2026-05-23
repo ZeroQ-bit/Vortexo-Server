@@ -108,7 +108,7 @@ func (h *Handler) VortexoHome(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	candidates := h.cachedVortexoHomeCandidates(ctx, now)
-	homeCtx := h.vortexoHomeContext(r, candidates, now)
+	homeCtx := h.vortexoHomeContext(ctx, r, candidates, now)
 	rows := h.buildVortexoHomeRows(candidates, homeCtx, rowLimit, itemLimit)
 
 	respondJSON(w, http.StatusOK, vortexoHomeFeed{
@@ -224,6 +224,7 @@ func (h *Handler) vortexoDiscoverHomeCandidates(ctx context.Context) []vortexoHo
 }
 
 func (h *Handler) vortexoHomeContext(
+	ctx context.Context,
 	r *http.Request,
 	candidates []vortexoHomeCandidate,
 	now time.Time,
@@ -240,6 +241,11 @@ func (h *Handler) vortexoHomeContext(
 		if h.userStore != nil {
 			if history, err := h.userStore.GetWatchHistory(userID, 80); err == nil {
 				applyVortexoWatchHistory(&homeCtx, history, candidates)
+			}
+		}
+		if h.traktStore != nil {
+			if history, err := h.traktStore.GetExternalWatchHistory(ctx, userID, 200); err == nil {
+				applyVortexoExternalWatchHistory(&homeCtx, history, candidates)
 			}
 		}
 	}
@@ -271,6 +277,57 @@ func applyVortexoWatchHistory(
 			for _, genre := range candidate.item.Genres {
 				homeCtx.genreWeights[normalizeHomeText(genre)] += 3
 			}
+		}
+	}
+}
+
+func applyVortexoExternalWatchHistory(
+	homeCtx *vortexoHomeContext,
+	history []database.ExternalWatchHistory,
+	candidates []vortexoHomeCandidate,
+) {
+	byIdentity := make(map[string]vortexoHomeCandidate, len(candidates))
+	byTitle := make(map[string]vortexoHomeCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byIdentity[candidate.identity] = candidate
+		byTitle[normalizeHomeText(candidate.item.Title)] = candidate
+	}
+
+	for _, entry := range history {
+		titleKey := normalizeHomeText(entry.Title)
+		if titleKey != "" {
+			homeCtx.watchedTitles[titleKey] = true
+			if homeCtx.recentWatchName == "" {
+				homeCtx.recentWatchName = entry.Title
+			}
+		}
+
+		mediaType := strings.ToLower(strings.TrimSpace(entry.MediaType))
+		if mediaType == "show" || mediaType == "series" || mediaType == "episode" {
+			mediaType = "tv"
+		}
+		identity := ""
+		if entry.TMDBID > 0 && (mediaType == "movie" || mediaType == "tv") {
+			identity = mediaType + ":" + strconv.Itoa(entry.TMDBID)
+		}
+
+		var candidate vortexoHomeCandidate
+		var ok bool
+		if identity != "" {
+			candidate, ok = byIdentity[identity]
+		}
+		if !ok && titleKey != "" {
+			candidate, ok = byTitle[titleKey]
+		}
+		if !ok {
+			continue
+		}
+
+		if entry.MediaType != "episode" {
+			homeCtx.watched[candidate.identity] = true
+		}
+		for _, genre := range candidate.item.Genres {
+			homeCtx.genreWeights[normalizeHomeText(genre)] += 3
 		}
 	}
 }

@@ -107,6 +107,7 @@ func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 		"name":                          "Vortexo Server Sources",
 		"home":                          true,
 		"live_tv_rows":                  true,
+		"trakt_import":                  true,
 		"source_api":                    true,
 		"playback":                      true,
 		"subtitles":                     true,

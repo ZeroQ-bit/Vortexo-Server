@@ -95,6 +95,8 @@ interface SettingsData {
   realdebrid_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
+  trakt_client_id: string;
+  trakt_client_secret: string;
   opensubtitles_enabled: boolean;
   opensubtitles_api_key: string;
   opensubtitles_username: string;
@@ -184,6 +186,32 @@ interface MDBListEntry {
   url: string;
   name?: string;
   enabled: boolean;
+}
+
+interface TraktStatus {
+  configured: boolean;
+  has_client_id: boolean;
+  connected: boolean;
+  needs_client_key: boolean;
+  expires_at?: string | null;
+  last_sync_at?: string | null;
+  needs_refresh?: boolean;
+}
+
+interface TraktDeviceAuth {
+  device_code: string;
+  user_code: string;
+  verification_url: string;
+  expires_in: number;
+  interval: number;
+}
+
+interface TraktSyncResult {
+  imported_movies: number;
+  imported_shows: number;
+  imported_episodes: number;
+  skipped: number;
+  synced_at: string;
 }
 
 interface M3USource {
@@ -356,6 +384,14 @@ export default function Settings() {
   const [mdbUsername, setMdbUsername] = useState("");
   const [fetchingUserLists, setFetchingUserLists] = useState(false);
 
+  // State - Trakt
+  const [traktStatus, setTraktStatus] = useState<TraktStatus | null>(null);
+  const [traktDeviceAuth, setTraktDeviceAuth] =
+    useState<TraktDeviceAuth | null>(null);
+  const [traktBusy, setTraktBusy] = useState<
+    "status" | "device" | "token" | "sync" | "disconnect" | null
+  >(null);
+
   // State - M3U
   const [m3uSources, setM3uSources] = useState<M3USource[]>([]);
   const [newM3uName, setNewM3uName] = useState("");
@@ -501,6 +537,28 @@ export default function Settings() {
     }
   };
 
+  const buildSettingsPayload = (source: SettingsData) => ({
+    ...source,
+    mdblist_lists: JSON.stringify(mdbLists),
+    m3u_sources: m3uSources,
+    xtream_sources: xtreamSources,
+    livetv_enabled_sources: Array.from(enabledSources),
+    livetv_enabled_categories: Array.from(enabledCategories),
+  });
+
+  const fetchTraktStatus = async () => {
+    setTraktBusy("status");
+    try {
+      const response = await api.get<TraktStatus>("/trakt/status");
+      setTraktStatus(response.data);
+    } catch (error) {
+      console.error("Failed to fetch Trakt status:", error);
+      setTraktStatus(null);
+    } finally {
+      setTraktBusy(null);
+    }
+  };
+
   const fetchSettings = async () => {
     try {
       const response = await api.get("/settings");
@@ -533,6 +591,7 @@ export default function Settings() {
       );
 
       setSettings(data);
+      void fetchTraktStatus();
 
       if (data.mdblist_lists) {
         try {
@@ -582,16 +641,8 @@ export default function Settings() {
     setMessage("");
 
     try {
-      const settingsToSave = {
-        ...settings,
-        mdblist_lists: JSON.stringify(mdbLists),
-        m3u_sources: m3uSources,
-        xtream_sources: xtreamSources,
-        livetv_enabled_sources: Array.from(enabledSources),
-        livetv_enabled_categories: Array.from(enabledCategories),
-      };
-
-      await api.put("/settings", settingsToSave);
+      await api.put("/settings", buildSettingsPayload(settings));
+      void fetchTraktStatus();
 
       setMessage("✅ Settings saved successfully!");
       setTimeout(() => setMessage(""), 3000);
@@ -608,6 +659,94 @@ export default function Settings() {
   const updateSetting = (key: keyof SettingsData, value: any) => {
     if (!settings) return;
     setSettings({ ...settings, [key]: value });
+  };
+
+  const startTraktDeviceAuth = async () => {
+    if (!settings) return;
+    if (!settings.trakt_client_id || !settings.trakt_client_secret) {
+      setMessage("❌ Enter and save your Trakt client ID and secret first");
+      return;
+    }
+
+    setTraktBusy("device");
+    setMessage("");
+    try {
+      await api.put("/settings", buildSettingsPayload(settings));
+      const response = await api.post<TraktDeviceAuth>("/trakt/device/code");
+      setTraktDeviceAuth(response.data);
+      setMessage("Open Trakt and enter the code shown below.");
+    } catch (error: any) {
+      setMessage(
+        `❌ Trakt link failed: ${error.response?.data?.error || error.message}`,
+      );
+    } finally {
+      setTraktBusy(null);
+    }
+  };
+
+  const completeTraktDeviceAuth = async () => {
+    if (!traktDeviceAuth) return;
+
+    setTraktBusy("token");
+    setMessage("");
+    try {
+      const response = await api.post("/trakt/device/token", {
+        device_code: traktDeviceAuth.device_code,
+      });
+      if (response.status === 202) {
+        setMessage("⏳ Trakt is still waiting for authorization.");
+        return;
+      }
+      setTraktDeviceAuth(null);
+      await fetchTraktStatus();
+      setMessage("✅ Trakt connected");
+    } catch (error: any) {
+      setMessage(
+        `❌ Trakt authorization failed: ${error.response?.data?.error || error.message}`,
+      );
+    } finally {
+      setTraktBusy(null);
+    }
+  };
+
+  const syncTraktWatched = async () => {
+    setTraktBusy("sync");
+    setMessage("");
+    try {
+      const response = await api.post<TraktSyncResult>("/trakt/sync/watched", {
+        import_movies: true,
+        import_shows: true,
+      });
+      await fetchTraktStatus();
+      setMessage(
+        `✅ Imported ${response.data.imported_movies} movies, ${response.data.imported_shows} shows, and ${response.data.imported_episodes} episodes from Trakt`,
+      );
+    } catch (error: any) {
+      setMessage(
+        `❌ Trakt sync failed: ${error.response?.data?.error || error.message}`,
+      );
+    } finally {
+      setTraktBusy(null);
+    }
+  };
+
+  const disconnectTrakt = async () => {
+    if (!confirm("Disconnect this Trakt account from Vortexo Server?")) return;
+
+    setTraktBusy("disconnect");
+    setMessage("");
+    try {
+      await api.delete("/trakt/disconnect");
+      setTraktDeviceAuth(null);
+      await fetchTraktStatus();
+      setMessage("✅ Trakt disconnected");
+    } catch (error: any) {
+      setMessage(
+        `❌ Trakt disconnect failed: ${error.response?.data?.error || error.message}`,
+      );
+    } finally {
+      setTraktBusy(null);
+    }
   };
 
   const normalizeOpenSubtitlesLanguageCode = (value: string) => {
@@ -723,17 +862,10 @@ export default function Settings() {
   const saveSettingsImmediate = async (patch: Partial<SettingsData>) => {
     if (!settings) return;
     const next: SettingsData = { ...settings, ...patch } as SettingsData;
-    const settingsToSave = {
-      ...next,
-      mdblist_lists: JSON.stringify(mdbLists),
-      m3u_sources: m3uSources,
-      xtream_sources: xtreamSources,
-      livetv_enabled_sources: Array.from(enabledSources),
-      livetv_enabled_categories: Array.from(enabledCategories),
-    };
     try {
-      await api.put("/settings", settingsToSave);
+      await api.put("/settings", buildSettingsPayload(next));
       setSettings(next);
+      void fetchTraktStatus();
       setMessage("✅ Setting saved");
       setTimeout(() => setMessage(""), 2000);
     } catch (error: any) {
@@ -1992,6 +2124,148 @@ export default function Settings() {
                         mdblist.com/preferences
                       </a>
                     </p>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
+                    <div className="mb-4 flex items-start justify-between gap-4">
+                      <div>
+                        <h4 className="text-sm font-medium text-white">
+                          Trakt Watch History
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Imports watched movies and episodes into Vortexo
+                          Server so Home recommendations learn from your Trakt
+                          history.
+                        </p>
+                      </div>
+                      <div
+                        className={`rounded-full px-3 py-1 text-xs ${
+                          traktStatus?.connected
+                            ? "bg-green-500/10 text-green-300"
+                            : "bg-slate-500/10 text-slate-300"
+                        }`}
+                      >
+                        {traktStatus?.connected ? "Connected" : "Not connected"}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                          Trakt Client ID
+                        </label>
+                        <input
+                          type="text"
+                          value={settings?.trakt_client_id || ""}
+                          onChange={(e) =>
+                            updateSetting("trakt_client_id", e.target.value)
+                          }
+                          className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                          placeholder="Trakt OAuth client ID"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                          Trakt Client Secret
+                        </label>
+                        <input
+                          type="password"
+                          value={settings?.trakt_client_secret || ""}
+                          onChange={(e) =>
+                            updateSetting("trakt_client_secret", e.target.value)
+                          }
+                          className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                          placeholder="Trakt OAuth client secret"
+                        />
+                      </div>
+                    </div>
+
+                    {traktStatus?.last_sync_at && (
+                      <p className="mt-3 text-xs text-slate-500">
+                        Last import: {formatDateTime(traktStatus.last_sync_at)}
+                      </p>
+                    )}
+
+                    {traktDeviceAuth && (
+                      <div className="mt-4 rounded-lg border border-blue-500/20 bg-blue-500/10 p-4">
+                        <p className="text-xs uppercase tracking-wide text-blue-300">
+                          Trakt code
+                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-3">
+                          <span className="rounded-lg bg-black/30 px-4 py-2 text-2xl font-bold tracking-widest text-white">
+                            {traktDeviceAuth.user_code}
+                          </span>
+                          <a
+                            href={traktDeviceAuth.verification_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 rounded-lg border border-blue-400/30 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10"
+                          >
+                            Open Trakt
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        onClick={startTraktDeviceAuth}
+                        disabled={traktBusy !== null}
+                        className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+                      >
+                        {traktBusy === "device" ? (
+                          <Loader className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ExternalLink className="h-4 w-4" />
+                        )}
+                        Link Trakt
+                      </button>
+
+                      {traktDeviceAuth && (
+                        <button
+                          type="button"
+                          onClick={completeTraktDeviceAuth}
+                          disabled={traktBusy !== null}
+                          className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500 disabled:opacity-50"
+                        >
+                          {traktBusy === "token" ? (
+                            <Loader className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <CheckCircle className="h-4 w-4" />
+                          )}
+                          I Authorized
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={syncTraktWatched}
+                        disabled={!traktStatus?.connected || traktBusy !== null}
+                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        {traktBusy === "sync" ? (
+                          <Loader className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                        Import Watched
+                      </button>
+
+                      {traktStatus?.connected && (
+                        <button
+                          type="button"
+                          onClick={disconnectTrakt}
+                          disabled={traktBusy !== null}
+                          className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          <X className="h-4 w-4" />
+                          Disconnect
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
