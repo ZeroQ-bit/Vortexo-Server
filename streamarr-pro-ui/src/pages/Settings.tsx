@@ -25,12 +25,49 @@ import {
   Camera,
   Loader,
   Search,
+  ChevronDown,
 } from "lucide-react";
 import axios from "axios";
 
 // v1.2.1 - Added manual IP configuration
 const API_BASE_URL = import.meta.env.VITE_API_URL || "/api/v1";
 const CLEANUP_MATCH_REALDEBRID_KEY = "streamarr_cleanup_match_realdebrid";
+
+const openSubtitlesLanguageOptions = [
+  { code: "en", label: "English" },
+  { code: "bs", label: "Bosnian" },
+  { code: "hr", label: "Croatian" },
+  { code: "sr", label: "Serbian" },
+  { code: "sl", label: "Slovenian" },
+  { code: "mk", label: "Macedonian" },
+  { code: "sq", label: "Albanian" },
+  { code: "es", label: "Spanish" },
+  { code: "fr", label: "French" },
+  { code: "de", label: "German" },
+  { code: "it", label: "Italian" },
+  { code: "pt", label: "Portuguese" },
+  { code: "pt-br", label: "Portuguese (Brazil)" },
+  { code: "tr", label: "Turkish" },
+  { code: "ru", label: "Russian" },
+  { code: "uk", label: "Ukrainian" },
+  { code: "pl", label: "Polish" },
+  { code: "nl", label: "Dutch" },
+  { code: "ro", label: "Romanian" },
+  { code: "hu", label: "Hungarian" },
+  { code: "bg", label: "Bulgarian" },
+  { code: "el", label: "Greek" },
+  { code: "cs", label: "Czech" },
+  { code: "sk", label: "Slovak" },
+  { code: "sv", label: "Swedish" },
+  { code: "no", label: "Norwegian" },
+  { code: "da", label: "Danish" },
+  { code: "fi", label: "Finnish" },
+  { code: "ar", label: "Arabic" },
+  { code: "hi", label: "Hindi" },
+  { code: "zh", label: "Chinese" },
+  { code: "ja", label: "Japanese" },
+  { code: "ko", label: "Korean" },
+];
 
 // Create axios instance with auth token
 const api = axios.create({
@@ -299,6 +336,10 @@ export default function Settings() {
   const [cleanupRequireRealDebrid, setCleanupRequireRealDebrid] = useState(
     () => localStorage.getItem(CLEANUP_MATCH_REALDEBRID_KEY) === "true",
   );
+  const [
+    openSubtitlesLanguageDropdownOpen,
+    setOpenSubtitlesLanguageDropdownOpen,
+  ] = useState(false);
 
   // State - MDBList
   const [newListUrl, setNewListUrl] = useState("");
@@ -567,6 +608,116 @@ export default function Settings() {
   const updateSetting = (key: keyof SettingsData, value: any) => {
     if (!settings) return;
     setSettings({ ...settings, [key]: value });
+  };
+
+  const normalizeOpenSubtitlesLanguageCode = (value: string) => {
+    const normalized = value.trim().toLowerCase().replace("_", "-");
+    const aliases: Record<string, string> = {
+      english: "en",
+      eng: "en",
+      bosnian: "bs",
+      bos: "bs",
+      croatian: "hr",
+      hrv: "hr",
+      serbian: "sr",
+      srp: "sr",
+      spanish: "es",
+      spa: "es",
+      french: "fr",
+      fra: "fr",
+      fre: "fr",
+      german: "de",
+      deu: "de",
+      ger: "de",
+      italian: "it",
+      ita: "it",
+      portuguese: "pt",
+      por: "pt",
+      russian: "ru",
+      rus: "ru",
+    };
+    return aliases[normalized] || normalized;
+  };
+
+  const getSelectedOpenSubtitlesLanguages = () => {
+    const raw = settings?.opensubtitles_languages || "en";
+    const selected = raw
+      .split(/[,\s;]+/)
+      .map(normalizeOpenSubtitlesLanguageCode)
+      .filter(Boolean);
+    const seen = new Set<string>();
+    const unique = selected.filter((code) => {
+      if (seen.has(code)) return false;
+      seen.add(code);
+      return true;
+    });
+    return unique.length > 0 ? unique : ["en"];
+  };
+
+  const getOpenSubtitlesLanguageLabel = () => {
+    const selected = getSelectedOpenSubtitlesLanguages();
+    return selected
+      .map(
+        (code) =>
+          openSubtitlesLanguageOptions.find((option) => option.code === code)
+            ?.label || code.toUpperCase(),
+      )
+      .join(", ");
+  };
+
+  const toggleOpenSubtitlesLanguage = (code: string) => {
+    const selected = getSelectedOpenSubtitlesLanguages();
+    const next = selected.includes(code)
+      ? selected.filter((selectedCode) => selectedCode !== code)
+      : [...selected, code];
+    updateSetting(
+      "opensubtitles_languages",
+      (next.length > 0 ? next : ["en"]).join(","),
+    );
+  };
+
+  const renderOpenSubtitlesLanguageDropdown = () => {
+    const selected = getSelectedOpenSubtitlesLanguages();
+
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() =>
+            setOpenSubtitlesLanguageDropdownOpen(
+              (isOpen) => !isOpen,
+            )
+          }
+          className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500 flex items-center justify-between gap-3 text-left"
+        >
+          <span className="truncate">{getOpenSubtitlesLanguageLabel()}</span>
+          <ChevronDown
+            className={`w-4 h-4 text-slate-400 transition-transform ${
+              openSubtitlesLanguageDropdownOpen ? "rotate-180" : ""
+            }`}
+          />
+        </button>
+
+        {openSubtitlesLanguageDropdownOpen && (
+          <div className="absolute z-50 mt-2 w-full max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-[#252525] shadow-xl">
+            {openSubtitlesLanguageOptions.map((option) => (
+              <label
+                key={option.code}
+                className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-slate-200 hover:bg-white/5 cursor-pointer"
+              >
+                <span>{option.label}</span>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option.code)}
+                  onChange={() => toggleOpenSubtitlesLanguage(option.code)}
+                  className="w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
+                />
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const saveSettingsImmediate = async (patch: Partial<SettingsData>) => {
@@ -1913,18 +2064,7 @@ export default function Settings() {
                           <label className="block text-sm font-medium text-slate-300 mb-2">
                             Languages
                           </label>
-                          <input
-                            type="text"
-                            value={settings?.opensubtitles_languages || "en"}
-                            onChange={(e) =>
-                              updateSetting(
-                                "opensubtitles_languages",
-                                e.target.value,
-                              )
-                            }
-                            className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                            placeholder="en,es,sr"
-                          />
+                          {renderOpenSubtitlesLanguageDropdown()}
                         </div>
 
                         <div>
@@ -3676,18 +3816,7 @@ export default function Settings() {
                       <label className="block text-sm text-slate-300 mb-2">
                         Languages
                       </label>
-                      <input
-                        type="text"
-                        value={settings?.opensubtitles_languages || "en"}
-                        onChange={(e) =>
-                          updateSetting(
-                            "opensubtitles_languages",
-                            e.target.value,
-                          )
-                        }
-                        placeholder="en,es,sr"
-                        className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500"
-                      />
+                      {renderOpenSubtitlesLanguageDropdown()}
                     </div>
 
                     <div>
