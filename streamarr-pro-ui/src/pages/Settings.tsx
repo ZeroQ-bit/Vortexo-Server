@@ -58,6 +58,11 @@ interface SettingsData {
   realdebrid_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
+  opensubtitles_enabled: boolean;
+  opensubtitles_api_key: string;
+  opensubtitles_username: string;
+  opensubtitles_password: string;
+  opensubtitles_languages: string;
   user_create_playlist: boolean;
   total_pages: number;
   language: string;
@@ -476,6 +481,10 @@ export default function Settings() {
       }
       if (!data.dmm_provider_url) {
         data.dmm_provider_url = "https://debridmediamanager.com";
+      }
+      data.opensubtitles_enabled = Boolean(data.opensubtitles_enabled);
+      if (!data.opensubtitles_languages) {
+        data.opensubtitles_languages = "en";
       }
       data.dmm_provider_enabled = Boolean(data.dmm_provider_enabled);
       data.dmm_library_import_enabled = Boolean(
@@ -1851,6 +1860,123 @@ export default function Settings() {
                       translator when available. Unsupported languages keep the
                       original subtitle text.
                     </p>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h4 className="text-sm font-medium text-white">
+                          OpenSubtitles Live Subtitles
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-1">
+                          Fetches external subtitles on demand for Xtream/M3U
+                          movie and episode playback.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settings?.opensubtitles_enabled || false}
+                          onChange={(e) =>
+                            updateSetting(
+                              "opensubtitles_enabled",
+                              e.target.checked,
+                            )
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                      </label>
+                    </div>
+
+                    {settings?.opensubtitles_enabled && (
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">
+                            API Key
+                          </label>
+                          <input
+                            type="password"
+                            value={settings?.opensubtitles_api_key || ""}
+                            onChange={(e) =>
+                              updateSetting(
+                                "opensubtitles_api_key",
+                                e.target.value,
+                              )
+                            }
+                            className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                            placeholder="OpenSubtitles API key"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">
+                            Languages
+                          </label>
+                          <input
+                            type="text"
+                            value={settings?.opensubtitles_languages || "en"}
+                            onChange={(e) =>
+                              updateSetting(
+                                "opensubtitles_languages",
+                                e.target.value,
+                              )
+                            }
+                            className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                            placeholder="en,es,sr"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">
+                            Username
+                          </label>
+                          <input
+                            type="text"
+                            value={settings?.opensubtitles_username || ""}
+                            onChange={(e) =>
+                              updateSetting(
+                                "opensubtitles_username",
+                                e.target.value,
+                              )
+                            }
+                            className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                            placeholder="OpenSubtitles username"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">
+                            Password
+                          </label>
+                          <input
+                            type="password"
+                            value={settings?.opensubtitles_password || ""}
+                            onChange={(e) =>
+                              updateSetting(
+                                "opensubtitles_password",
+                                e.target.value,
+                              )
+                            }
+                            className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                            placeholder="OpenSubtitles password"
+                          />
+                        </div>
+
+                        <p className="md:col-span-2 text-xs text-slate-500">
+                          Downloads use your OpenSubtitles account limits and
+                          are cached locally after the first successful fetch.{" "}
+                          <a
+                            href="https://www.opensubtitles.com/consumers"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-red-400 hover:underline"
+                          >
+                            Create an API consumer
+                          </a>
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -3496,6 +3622,118 @@ export default function Settings() {
                   </span>{" "}
                   categories.
                 </p>
+              </div>
+
+              {/* OpenSubtitles */}
+              <div className="p-4 bg-[#1f1f1f]/70 border border-white/10 rounded-lg">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h4 className="text-white font-medium flex items-center gap-2">
+                      <span>💬</span> OpenSubtitles for Xtream/M3U VOD
+                    </h4>
+                    <p className="text-sm text-slate-400 mt-1">
+                      Fetch external subtitles on demand for movie and episode
+                      playback exposed through Xtream Codes and M3U playlists.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settings?.opensubtitles_enabled || false}
+                      onChange={(e) =>
+                        updateSetting(
+                          "opensubtitles_enabled",
+                          e.target.checked,
+                        )
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                  </label>
+                </div>
+
+                {settings?.opensubtitles_enabled && (
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-2">
+                        API Key
+                      </label>
+                      <input
+                        type="password"
+                        value={settings?.opensubtitles_api_key || ""}
+                        onChange={(e) =>
+                          updateSetting(
+                            "opensubtitles_api_key",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="OpenSubtitles API key"
+                        className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-2">
+                        Languages
+                      </label>
+                      <input
+                        type="text"
+                        value={settings?.opensubtitles_languages || "en"}
+                        onChange={(e) =>
+                          updateSetting(
+                            "opensubtitles_languages",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="en,es,sr"
+                        className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-2">
+                        Username
+                      </label>
+                      <input
+                        type="text"
+                        value={settings?.opensubtitles_username || ""}
+                        onChange={(e) =>
+                          updateSetting(
+                            "opensubtitles_username",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="OpenSubtitles username"
+                        className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm text-slate-300 mb-2">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        value={settings?.opensubtitles_password || ""}
+                        onChange={(e) =>
+                          updateSetting(
+                            "opensubtitles_password",
+                            e.target.value,
+                          )
+                        }
+                        placeholder="OpenSubtitles password"
+                        className="w-full p-3 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+
+                    <p className="md:col-span-2 text-xs text-slate-500">
+                      Uses your OpenSubtitles account limits and caches each
+                      subtitle locally after the first successful fetch. This
+                      applies to VOD movies and episodes, not arbitrary live TV
+                      broadcast captions.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Enable Live TV */}

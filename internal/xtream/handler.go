@@ -71,6 +71,10 @@ type XtreamHandler struct {
 	// Sorting settings
 	getSortOrder  func() string
 	getSortPrefer func() string
+
+	openSubtitlesMu        sync.Mutex
+	openSubtitlesClient    *services.OpenSubtitlesClient
+	openSubtitlesClientKey string
 }
 
 const xtreamMovieQualityVariantBase int64 = 900000000000
@@ -527,8 +531,118 @@ func intFromSettings(settings map[string]interface{}, key string) (int, bool) {
 	return 0, false
 }
 
+func stringFromSettings(settings map[string]interface{}, key string) (string, bool) {
+	switch v := settings[key].(type) {
+	case string:
+		return v, true
+	}
+	return "", false
+}
+
 func (h *XtreamHandler) qualityVariantsEnabled() bool {
 	return h.enableQualityVariants != nil && h.enableQualityVariants()
+}
+
+func (h *XtreamHandler) currentOpenSubtitlesConfig() services.OpenSubtitlesConfig {
+	cfg := services.OpenSubtitlesConfig{
+		Enabled:   strings.EqualFold(os.Getenv("OPENSUBTITLES_ENABLED"), "true"),
+		APIKey:    os.Getenv("OPENSUBTITLES_API_KEY"),
+		Username:  os.Getenv("OPENSUBTITLES_USERNAME"),
+		Password:  os.Getenv("OPENSUBTITLES_PASSWORD"),
+		Languages: os.Getenv("OPENSUBTITLES_LANGUAGES"),
+		UserAgent: os.Getenv("OPENSUBTITLES_USER_AGENT"),
+		BaseURL:   os.Getenv("OPENSUBTITLES_BASE_URL"),
+	}
+
+	if h.getSettings != nil {
+		if settingsMap, ok := h.getSettings().(map[string]interface{}); ok && settingsMap != nil {
+			if v, ok := boolFromSettings(settingsMap, "opensubtitles_enabled"); ok {
+				cfg.Enabled = v
+			}
+			if v, ok := stringFromSettings(settingsMap, "opensubtitles_api_key"); ok {
+				cfg.APIKey = v
+			}
+			if v, ok := stringFromSettings(settingsMap, "opensubtitles_username"); ok {
+				cfg.Username = v
+			}
+			if v, ok := stringFromSettings(settingsMap, "opensubtitles_password"); ok {
+				cfg.Password = v
+			}
+			if v, ok := stringFromSettings(settingsMap, "opensubtitles_languages"); ok {
+				cfg.Languages = v
+			}
+		}
+	}
+
+	if strings.TrimSpace(cfg.Languages) == "" {
+		cfg.Languages = "en"
+	}
+	return cfg
+}
+
+func (h *XtreamHandler) openSubtitlesClientFor(cfg services.OpenSubtitlesConfig) *services.OpenSubtitlesClient {
+	key := cfg.ClientKey()
+	h.openSubtitlesMu.Lock()
+	defer h.openSubtitlesMu.Unlock()
+
+	if h.openSubtitlesClient == nil || h.openSubtitlesClientKey != key {
+		h.openSubtitlesClient = services.NewOpenSubtitlesClient(cfg)
+		h.openSubtitlesClientKey = key
+	}
+	return h.openSubtitlesClient
+}
+
+func (h *XtreamHandler) fetchOpenSubtitles(ctx context.Context, req services.OpenSubtitlesSearchRequest) (*services.OpenSubtitlesFetchedSubtitle, error) {
+	cfg := h.currentOpenSubtitlesConfig()
+	if !cfg.Ready() {
+		return nil, fmt.Errorf("opensubtitles is not configured")
+	}
+	return h.openSubtitlesClientFor(cfg).FetchSubtitle(ctx, req)
+}
+
+func (h *XtreamHandler) openSubtitlesTracks(serverURL, username, password, mediaType string, id interface{}) []map[string]interface{} {
+	cfg := h.currentOpenSubtitlesConfig()
+	if !cfg.Ready() {
+		return nil
+	}
+
+	languages := services.OpenSubtitlesLanguageList(cfg.Languages)
+	tracks := make([]map[string]interface{}, 0, len(languages))
+	for _, language := range languages {
+		subtitleURL := xtreamSubtitleURL(serverURL, mediaType, username, password, id, language, "vtt")
+		tracks = append(tracks, map[string]interface{}{
+			"id":       fmt.Sprintf("opensubtitles-%s", language),
+			"name":     fmt.Sprintf("OpenSubtitles %s", strings.ToUpper(language)),
+			"language": language,
+			"format":   "vtt",
+			"source":   "opensubtitles",
+			"url":      subtitleURL,
+		})
+	}
+	return tracks
+}
+
+func (h *XtreamHandler) openSubtitlesPlaylistURLs(serverURL, username, password, mediaType string, id interface{}) []string {
+	tracks := h.openSubtitlesTracks(serverURL, username, password, mediaType, id)
+	urls := make([]string, 0, len(tracks))
+	for _, track := range tracks {
+		if value, ok := track["url"].(string); ok && value != "" {
+			urls = append(urls, value)
+		}
+	}
+	return urls
+}
+
+func xtreamSubtitleURL(serverURL, mediaType, username, password string, id interface{}, language, format string) string {
+	return fmt.Sprintf("%s/subtitles/%s/%s/%s/%v/%s.%s",
+		strings.TrimRight(serverURL, "/"),
+		url.PathEscape(mediaType),
+		url.PathEscape(username),
+		url.PathEscape(password),
+		url.PathEscape(fmt.Sprint(id)),
+		url.PathEscape(language),
+		url.PathEscape(format),
+	)
 }
 
 func encodeMovieQualityStreamID(tmdbID int64, quality string) int64 {
@@ -599,7 +713,7 @@ func cloneXtreamMap(src map[string]interface{}) map[string]interface{} {
 	return dst
 }
 
-func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string, tmdbID int64, title, yearStr, logo string, variants bool) int {
+func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string, tmdbID int64, title, yearStr, logo string, variants bool, subtitleURLs []string) int {
 	if variants {
 		count := 0
 		for _, variant := range xtreamMovieQualityVariants {
@@ -607,6 +721,7 @@ func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string
 			displayTitle := fmt.Sprintf("%s%s [%s]", title, yearStr, variant.Label)
 			fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d_%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
 				tmdbID, variant.Suffix, displayTitle, logo, displayTitle)
+			writeExtVLCSubtitleOptions(w, subtitleURLs)
 			fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, streamID)
 			count++
 		}
@@ -616,11 +731,12 @@ func writeMoviePlaylistEntries(w io.Writer, serverURL, username, password string
 	displayTitle := title + yearStr
 	fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"movie_%d\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
 		tmdbID, displayTitle, logo, displayTitle)
+	writeExtVLCSubtitleOptions(w, subtitleURLs)
 	fmt.Fprintf(w, "%s/movie/%s/%s/%d.mp4\n", serverURL, username, password, tmdbID)
 	return 1
 }
 
-func writeMovieDirectSourcePlaylistEntries(w io.Writer, tmdbID int64, title, yearStr, logo string, sources []xtreamDirectSource, duplicate bool) int {
+func writeMovieDirectSourcePlaylistEntries(w io.Writer, tmdbID int64, title, yearStr, logo string, sources []xtreamDirectSource, duplicate bool, subtitleURLs []string) int {
 	if len(sources) == 0 {
 		return 0
 	}
@@ -640,10 +756,21 @@ func writeMovieDirectSourcePlaylistEntries(w io.Writer, tmdbID int64, title, yea
 		}
 		fmt.Fprintf(w, "#EXTINF:-1 tvg-id=\"%s\" tvg-name=\"%s\" tvg-logo=\"%s\" group-title=\"Movies\",%s\n",
 			tvgID, displayTitle, logo, displayTitle)
+		writeExtVLCSubtitleOptions(w, subtitleURLs)
 		fmt.Fprintf(w, "%s\n", source.URL)
 	}
 
 	return limit
+}
+
+func writeExtVLCSubtitleOptions(w io.Writer, subtitleURLs []string) {
+	for _, subtitleURL := range subtitleURLs {
+		subtitleURL = strings.TrimSpace(subtitleURL)
+		if subtitleURL == "" {
+			continue
+		}
+		fmt.Fprintf(w, "#EXTVLCOPT:sub-file=%s\n", subtitleURL)
+	}
 }
 
 func movieFromXtreamRow(id, tmdbID int64, title string, year sql.NullInt64, metadata map[string]interface{}) *models.Movie {
@@ -936,6 +1063,8 @@ func (h *XtreamHandler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/movie/{username}/{password}/{id}.{ext}", h.handleMoviePlay).Methods("GET", "HEAD")
 	r.HandleFunc("/series/{username}/{password}/{id}.{ext}", h.handleSeriesPlay).Methods("GET", "HEAD")
 	r.HandleFunc("/live/{username}/{password}/{id}.{ext}", h.handleLivePlay).Methods("GET", "HEAD")
+	r.HandleFunc("/subtitles/movie/{username}/{password}/{id}/{lang}.{format}", h.handleMovieSubtitle).Methods("GET")
+	r.HandleFunc("/subtitles/series/{username}/{password}/{id}/{lang}.{format}", h.handleSeriesSubtitle).Methods("GET")
 
 	// Direct VOD format (some apps use this without /movie/ prefix)
 	r.HandleFunc("/{username}/{password}/{id}.{ext}", h.handleDirectPlay).Methods("GET", "HEAD")
@@ -1604,6 +1733,7 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 		directSource = sourceEntries[0].URL
 		containerExt = xtreamContainerExtension(sourceEntries[0].URL, containerExt)
 	}
+	subtitleTracks := h.openSubtitlesTracks(serverURL, username, password, "movie", tmdbID)
 
 	info := map[string]interface{}{
 		"info": map[string]interface{}{
@@ -1621,6 +1751,8 @@ func (h *XtreamHandler) getVODInfo(w http.ResponseWriter, r *http.Request) {
 			"cast":            castString,
 			"video":           xtreamVideoSources(sourceEntries),
 			"audio":           []interface{}{},
+			"subtitle":        subtitleTracks,
+			"subtitles":       subtitleTracks,
 			"bitrate":         0,
 			"backdrop_path":   []string{backdropPath},
 			"cover":           posterPath,
@@ -2127,6 +2259,7 @@ func (h *XtreamHandler) getSeriesInfo(w http.ResponseWriter, r *http.Request) {
 				directSource = episodeSources[0].URL
 				containerExt = xtreamContainerExtension(episodeSources[0].URL, containerExt)
 			}
+			subtitleTracks := h.openSubtitlesTracks(serverURL, username, password, "series", episodeIDStr)
 
 			info := map[string]interface{}{
 				"id":                  episodeIDStr,
@@ -2137,11 +2270,14 @@ func (h *XtreamHandler) getSeriesInfo(w http.ResponseWriter, r *http.Request) {
 				"added":               "",
 				"season":              seasonNum,
 				"direct_source":       directSource,
+				"subtitles":           subtitleTracks,
 				"info": map[string]interface{}{
 					"tmdb_id":       fmt.Sprintf("%d", tmdbID),
 					"name":          ep.Name,
 					"air_date":      ep.AirDate,
 					"video":         xtreamVideoSources(episodeSources),
+					"subtitle":      subtitleTracks,
+					"subtitles":     subtitleTracks,
 					"cover_big":     episodeImage,
 					"plot":          ep.Overview,
 					"movie_image":   episodeImage,
@@ -2628,6 +2764,228 @@ func (h *XtreamHandler) handleLivePlay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type movieSubtitleLookup struct {
+	TMDBID int64
+	IMDBID string
+	Title  string
+	Year   int
+}
+
+type episodeSubtitleLookup struct {
+	ParentTMDBID int
+	ParentIMDBID string
+	Title        string
+	Season       int
+	Episode      int
+}
+
+func (h *XtreamHandler) handleMovieSubtitle(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if !h.ValidateXtreamCredentials(vars["username"], vars["password"]) {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		return
+	}
+
+	lookup, err := h.resolveMovieSubtitleLookup(vars["id"])
+	if err != nil {
+		log.Printf("[Subtitles] Movie lookup failed for %s: %v", vars["id"], err)
+		http.Error(w, "Movie subtitle metadata not found", http.StatusNotFound)
+		return
+	}
+
+	subtitle, err := h.fetchOpenSubtitles(r.Context(), services.OpenSubtitlesSearchRequest{
+		Type:     "movie",
+		IMDBID:   lookup.IMDBID,
+		TMDBID:   int(lookup.TMDBID),
+		Query:    lookup.Title,
+		Year:     lookup.Year,
+		Language: vars["lang"],
+		Format:   vars["format"],
+	})
+	if err != nil {
+		log.Printf("[Subtitles] OpenSubtitles movie lookup failed for %s (%s): %v", lookup.Title, lookup.IMDBID, err)
+		http.Error(w, "Subtitle not found", http.StatusNotFound)
+		return
+	}
+
+	writeSubtitleResponse(w, subtitle)
+}
+
+func (h *XtreamHandler) handleSeriesSubtitle(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if !h.ValidateXtreamCredentials(vars["username"], vars["password"]) {
+		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
+		return
+	}
+
+	lookup, err := h.resolveEpisodeSubtitleLookup(r.Context(), vars["id"])
+	if err != nil {
+		log.Printf("[Subtitles] Episode lookup failed for %s: %v", vars["id"], err)
+		http.Error(w, "Episode subtitle metadata not found", http.StatusNotFound)
+		return
+	}
+
+	subtitle, err := h.fetchOpenSubtitles(r.Context(), services.OpenSubtitlesSearchRequest{
+		Type:         "episode",
+		ParentIMDBID: lookup.ParentIMDBID,
+		ParentTMDBID: lookup.ParentTMDBID,
+		Query:        lookup.Title,
+		Season:       lookup.Season,
+		Episode:      lookup.Episode,
+		Language:     vars["lang"],
+		Format:       vars["format"],
+	})
+	if err != nil {
+		log.Printf("[Subtitles] OpenSubtitles episode lookup failed for %s S%02dE%02d (%s): %v",
+			lookup.Title, lookup.Season, lookup.Episode, lookup.ParentIMDBID, err)
+		http.Error(w, "Subtitle not found", http.StatusNotFound)
+		return
+	}
+
+	writeSubtitleResponse(w, subtitle)
+}
+
+func writeSubtitleResponse(w http.ResponseWriter, subtitle *services.OpenSubtitlesFetchedSubtitle) {
+	w.Header().Set("Content-Type", subtitle.ContentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if subtitle.FileName != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", subtitle.FileName))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(subtitle.Content)
+}
+
+func (h *XtreamHandler) resolveMovieSubtitleLookup(rawID string) (movieSubtitleLookup, error) {
+	tmdbID, _, err := decodeMoviePlaybackID(rawID)
+	if err != nil {
+		return movieSubtitleLookup{}, err
+	}
+
+	var lookup movieSubtitleLookup
+	var dbID int64
+	var title string
+	var year sql.NullInt64
+	var metadataJSON []byte
+	var imdbID sql.NullString
+
+	query := `SELECT id, title, year, metadata, imdb_id FROM library_movies WHERE tmdb_id = $1`
+	err = h.db.QueryRow(query, tmdbID).Scan(&dbID, &title, &year, &metadataJSON, &imdbID)
+	if err != nil {
+		query = `SELECT id, tmdb_id, title, year, metadata, imdb_id FROM library_movies WHERE id = $1`
+		err = h.db.QueryRow(query, tmdbID).Scan(&dbID, &tmdbID, &title, &year, &metadataJSON, &imdbID)
+		if err != nil {
+			return movieSubtitleLookup{}, err
+		}
+	}
+
+	var metadata map[string]interface{}
+	_ = json.Unmarshal(metadataJSON, &metadata)
+	imdbIDStr := strings.TrimSpace(imdbID.String)
+	if imdbIDStr == "" {
+		if value, ok := metadata["imdb_id"].(string); ok {
+			imdbIDStr = strings.TrimSpace(value)
+		}
+	}
+	if imdbIDStr == "" {
+		return movieSubtitleLookup{}, fmt.Errorf("missing IMDb id")
+	}
+
+	lookup.TMDBID = tmdbID
+	lookup.IMDBID = imdbIDStr
+	lookup.Title = title
+	if year.Valid {
+		lookup.Year = int(year.Int64)
+	}
+	return lookup, nil
+}
+
+func (h *XtreamHandler) resolveEpisodeSubtitleLookup(ctx context.Context, episodeID string) (episodeSubtitleLookup, error) {
+	h.episodeMu.RLock()
+	cached, found := h.episodeCache[episodeID]
+	h.episodeMu.RUnlock()
+	if found && cached.Season > 0 && cached.Episode > 0 {
+		parentTMDBID, _ := strconv.Atoi(cached.SeriesID)
+		parentIMDBID := strings.TrimSpace(cached.IMDBID)
+		if parentIMDBID == "" && parentTMDBID > 0 && h.tmdb != nil {
+			if externalIDs, err := h.tmdb.GetSeriesExternalIDs(ctx, parentTMDBID); err == nil && externalIDs.IMDBID != "" {
+				parentIMDBID = externalIDs.IMDBID
+				h.episodeMu.Lock()
+				cached.IMDBID = parentIMDBID
+				h.episodeCache[episodeID] = cached
+				h.episodeMu.Unlock()
+				go h.saveEpisodeCache()
+			}
+		}
+		if parentIMDBID != "" {
+			return episodeSubtitleLookup{
+				ParentTMDBID: parentTMDBID,
+				ParentIMDBID: parentIMDBID,
+				Season:       cached.Season,
+				Episode:      cached.Episode,
+			}, nil
+		}
+	}
+
+	tmdbEpisodeID, err := strconv.ParseInt(episodeID, 10, 64)
+	if err != nil || tmdbEpisodeID <= 0 {
+		return episodeSubtitleLookup{}, fmt.Errorf("invalid episode id")
+	}
+
+	var parentTMDBID int
+	var title string
+	var seasonNum, episodeNum int
+	var metadataJSON []byte
+	query := `
+		SELECT s.tmdb_id, s.title, e.season_number, e.episode_number, s.metadata
+		FROM library_episodes e
+		JOIN library_series s ON e.series_id = s.id
+		WHERE e.tmdb_id = $1
+	`
+	if err := h.db.QueryRow(query, tmdbEpisodeID).Scan(&parentTMDBID, &title, &seasonNum, &episodeNum, &metadataJSON); err != nil {
+		return episodeSubtitleLookup{}, err
+	}
+
+	var metadata map[string]interface{}
+	_ = json.Unmarshal(metadataJSON, &metadata)
+	parentIMDBID := ""
+	if extIDs, ok := metadata["external_ids"].(map[string]interface{}); ok {
+		if value, ok := extIDs["imdb_id"].(string); ok {
+			parentIMDBID = strings.TrimSpace(value)
+		}
+	}
+	if parentIMDBID == "" {
+		if value, ok := metadata["imdb_id"].(string); ok {
+			parentIMDBID = strings.TrimSpace(value)
+		}
+	}
+	if parentIMDBID == "" && h.tmdb != nil {
+		if externalIDs, err := h.tmdb.GetSeriesExternalIDs(ctx, parentTMDBID); err == nil && externalIDs.IMDBID != "" {
+			parentIMDBID = externalIDs.IMDBID
+		}
+	}
+	if parentIMDBID == "" {
+		return episodeSubtitleLookup{}, fmt.Errorf("missing parent IMDb id")
+	}
+
+	h.episodeMu.Lock()
+	h.episodeCache[episodeID] = EpisodeLookup{
+		SeriesID: fmt.Sprintf("%d", parentTMDBID),
+		Season:   seasonNum,
+		Episode:  episodeNum,
+		IMDBID:   parentIMDBID,
+	}
+	h.episodeMu.Unlock()
+	go h.saveEpisodeCache()
+
+	return episodeSubtitleLookup{
+		ParentTMDBID: parentTMDBID,
+		ParentIMDBID: parentIMDBID,
+		Title:        title,
+		Season:       seasonNum,
+		Episode:      episodeNum,
+	}, nil
+}
+
 // handleDirectPlay handles /{username}/{password}/{id}.{ext}
 func (h *XtreamHandler) handleDirectPlay(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -2926,13 +3284,14 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 				if year.Valid {
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
 				}
+				subtitleURLs := h.openSubtitlesPlaylistURLs(serverURL, username, password, "movie", tmdbID)
 
 				if sourceEntries := movieDirectSources(metadata); len(sourceEntries) > 0 {
-					cachedCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider())
+					cachedCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider(), subtitleURLs)
 					continue
 				}
 
-				cachedCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
+				cachedCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled(), subtitleURLs)
 			}
 			log.Printf("[XTREAM] handleGetPlaylist: Added %d cached movie streams to playlist", cachedCount)
 		}
@@ -3039,13 +3398,14 @@ func (h *XtreamHandler) handleGetPlaylist(w http.ResponseWriter, r *http.Request
 				if year.Valid {
 					yearStr = fmt.Sprintf(" (%d)", year.Int64)
 				}
+				subtitleURLs := h.openSubtitlesPlaylistURLs(serverURL, username, password, "movie", tmdbID)
 
 				if sourceEntries := movieDirectSources(metadata); len(sourceEntries) > 0 {
-					totalCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider())
+					totalCount += writeMovieDirectSourcePlaylistEntries(w, tmdbID, title, yearStr, logo, sourceEntries, h.duplicateVODPerProvider != nil && h.duplicateVODPerProvider(), subtitleURLs)
 					continue
 				}
 
-				totalCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled())
+				totalCount += writeMoviePlaylistEntries(w, serverURL, username, password, tmdbID, title, yearStr, logo, h.qualityVariantsEnabled(), subtitleURLs)
 			}
 			log.Printf("[XTREAM] handleGetPlaylist: Added %d movies from full library to playlist", totalCount)
 		}

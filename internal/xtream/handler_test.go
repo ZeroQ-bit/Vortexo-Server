@@ -80,7 +80,7 @@ func TestWriteMovieDirectSourcePlaylistEntriesUsesRealURLs(t *testing.T) {
 	}
 
 	var single strings.Builder
-	count := writeMovieDirectSourcePlaylistEntries(&single, 123, "Movie", " (2024)", "poster.jpg", sources, false)
+	count := writeMovieDirectSourcePlaylistEntries(&single, 123, "Movie", " (2024)", "poster.jpg", sources, false, nil)
 	if count != 1 {
 		t.Fatalf("expected one playlist entry, got %d", count)
 	}
@@ -89,7 +89,7 @@ func TestWriteMovieDirectSourcePlaylistEntriesUsesRealURLs(t *testing.T) {
 	}
 
 	var duplicated strings.Builder
-	count = writeMovieDirectSourcePlaylistEntries(&duplicated, 123, "Movie", " (2024)", "poster.jpg", sources, true)
+	count = writeMovieDirectSourcePlaylistEntries(&duplicated, 123, "Movie", " (2024)", "poster.jpg", sources, true, nil)
 	if count != 2 {
 		t.Fatalf("expected two playlist entries, got %d", count)
 	}

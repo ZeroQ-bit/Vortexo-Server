@@ -523,12 +523,17 @@ func main() {
 	xtreamHandler.SetSettingsGetter(func() interface{} {
 		s := settingsManager.Get()
 		return map[string]interface{}{
-			"only_cached_streams":   s.OnlyCachedStreams,
-			"only_released_content": s.OnlyReleasedContent,
-			"min_year":              s.MinYear,
-			"min_runtime":           s.MinRuntime,
-			"include_adult_vod":     s.IncludeAdultVOD,
-			"block_bollywood":       s.BlockBollywood,
+			"only_cached_streams":     s.OnlyCachedStreams,
+			"only_released_content":   s.OnlyReleasedContent,
+			"min_year":                s.MinYear,
+			"min_runtime":             s.MinRuntime,
+			"include_adult_vod":       s.IncludeAdultVOD,
+			"block_bollywood":         s.BlockBollywood,
+			"opensubtitles_enabled":   s.OpenSubtitlesEnabled,
+			"opensubtitles_api_key":   s.OpenSubtitlesAPIKey,
+			"opensubtitles_username":  s.OpenSubtitlesUsername,
+			"opensubtitles_password":  s.OpenSubtitlesPassword,
+			"opensubtitles_languages": s.OpenSubtitlesLanguages,
 		}
 	})
 

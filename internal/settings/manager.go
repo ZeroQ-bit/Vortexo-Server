@@ -69,6 +69,13 @@ type Settings struct {
 	SubtitleTranslationAPIURL string `json:"subtitle_translation_api_url"`
 	SubtitleTranslationAPIKey string `json:"subtitle_translation_api_key"`
 
+	// OpenSubtitles
+	OpenSubtitlesEnabled   bool   `json:"opensubtitles_enabled"`
+	OpenSubtitlesAPIKey    string `json:"opensubtitles_api_key"`
+	OpenSubtitlesUsername  string `json:"opensubtitles_username"`
+	OpenSubtitlesPassword  string `json:"opensubtitles_password"`
+	OpenSubtitlesLanguages string `json:"opensubtitles_languages"`
+
 	// Service URLs
 	CometURL string `json:"comet_url"`
 
@@ -282,6 +289,8 @@ func getDefaultSettings() *Settings {
 		},
 		UseHTTPProxy:           false,
 		HTTPProxies:            []string{}, // Empty by default
+		OpenSubtitlesEnabled:   false,
+		OpenSubtitlesLanguages: "en",
 		HeadlessVidXAddress:    "localhost:3202",
 		UpdateBranch:           "main",
 		HeadlessVidXMaxThreads: 5,
@@ -660,6 +669,11 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"mdblist_api_key":                     m.settings.MDBListAPIKey,
 		"subtitle_translation_api_url":        m.settings.SubtitleTranslationAPIURL,
 		"subtitle_translation_api_key":        m.settings.SubtitleTranslationAPIKey,
+		"opensubtitles_enabled":               m.settings.OpenSubtitlesEnabled,
+		"opensubtitles_api_key":               m.settings.OpenSubtitlesAPIKey,
+		"opensubtitles_username":              m.settings.OpenSubtitlesUsername,
+		"opensubtitles_password":              m.settings.OpenSubtitlesPassword,
+		"opensubtitles_languages":             m.settings.OpenSubtitlesLanguages,
 		"use_realdebrid":                      m.settings.UseRealDebrid,
 		"use_premiumize":                      m.settings.UsePremiumize,
 		"comet_enabled":                       m.settings.CometEnabled,
@@ -729,6 +743,21 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["subtitle_translation_api_key"].(string); ok {
 		m.settings.SubtitleTranslationAPIKey = v
+	}
+	if v, ok := updates["opensubtitles_enabled"].(bool); ok {
+		m.settings.OpenSubtitlesEnabled = v
+	}
+	if v, ok := updates["opensubtitles_api_key"].(string); ok {
+		m.settings.OpenSubtitlesAPIKey = v
+	}
+	if v, ok := updates["opensubtitles_username"].(string); ok {
+		m.settings.OpenSubtitlesUsername = v
+	}
+	if v, ok := updates["opensubtitles_password"].(string); ok {
+		m.settings.OpenSubtitlesPassword = v
+	}
+	if v, ok := updates["opensubtitles_languages"].(string); ok {
+		m.settings.OpenSubtitlesLanguages = v
 	}
 	if v, ok := updates["use_realdebrid"].(bool); ok {
 		m.settings.UseRealDebrid = v

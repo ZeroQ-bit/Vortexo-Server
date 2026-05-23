@@ -20,6 +20,13 @@ type SettingsResponse struct {
 	PremiumizeAPIKey string `json:"premiumize_api_key"`
 	MDBListAPIKey    string `json:"mdblist_api_key"`
 
+	// OpenSubtitles
+	OpenSubtitlesEnabled   bool   `json:"opensubtitles_enabled"`
+	OpenSubtitlesAPIKey    string `json:"opensubtitles_api_key"`
+	OpenSubtitlesUsername  string `json:"opensubtitles_username"`
+	OpenSubtitlesPassword  string `json:"opensubtitles_password"`
+	OpenSubtitlesLanguages string `json:"opensubtitles_languages"`
+
 	// Playlist Settings
 	UserCreatePlaylist             bool   `json:"user_create_playlist"`
 	TotalPages                     int    `json:"total_pages"`
