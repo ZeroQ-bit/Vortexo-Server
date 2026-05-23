@@ -106,6 +106,7 @@ func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"name":                          "Vortexo Server Sources",
 		"home":                          true,
+		"live_tv_rows":                  true,
 		"source_api":                    true,
 		"playback":                      true,
 		"subtitles":                     true,

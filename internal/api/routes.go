@@ -196,6 +196,7 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	// Vortexo/private client source bridge
 	api.HandleFunc("/vortexo/capabilities", handler.VortexoCapabilities).Methods("GET")
 	api.HandleFunc("/vortexo/home", handler.VortexoHome).Methods("GET")
+	api.HandleFunc("/vortexo/live-tv/rows", handler.VortexoLiveTVRows).Methods("GET")
 	api.HandleFunc("/vortexo/sources", handler.VortexoSources).Methods("POST")
 	api.HandleFunc("/vortexo/subtitles/{token}/{lang}.{format}", handler.VortexoSubtitle).Methods("GET")
 	api.HandleFunc("/vortexo/subtitles/translate", handler.VortexoTranslateSubtitle).Methods("POST")
