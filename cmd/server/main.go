@@ -438,7 +438,7 @@ func main() {
 
 	// Create MultiProvider
 	multiProvider := providers.NewMultiProviderWithConfig(cfg.RealDebridAPIKey, runtimeAddons, tmdbClient, proxies)
-	if currentSettings.DMMProviderEnabled || currentSettings.DMMLibraryImportEnabled {
+	if currentSettings.DMMProviderEnabled {
 		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
 	}
 	multiProvider.SetQualityFilterSettings(func() string {

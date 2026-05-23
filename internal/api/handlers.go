@@ -116,7 +116,7 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 		h.tmdbClient,
 		proxies,
 	)
-	if cfg.DMMProviderEnabled || cfg.DMMLibraryImportEnabled {
+	if cfg.DMMProviderEnabled {
 		h.streamProvider.EnableDMMDirect(cfg.RealDebridAPIKey, cfg.DMMProviderURL)
 	}
 
