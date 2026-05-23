@@ -4338,6 +4338,10 @@ func (h *Handler) runService(serviceName string) {
 			err = h.channelManager.LoadChannels()
 		}
 
+	case services.ServiceMetadataRefresh:
+		interval = 24 * time.Hour
+		err = h.refreshLibraryMetadata(ctx)
+
 	case services.ServiceCacheCleanup:
 		interval = 1 * time.Hour
 		// Cache cleanup would be handled by cache manager

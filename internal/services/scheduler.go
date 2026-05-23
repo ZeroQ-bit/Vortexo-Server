@@ -169,6 +169,7 @@ const (
 	ServiceCacheCleanup      = "cache_cleanup"
 	ServiceEPGUpdate         = "epg_update"
 	ServiceChannelRefresh    = "channel_refresh"
+	ServiceMetadataRefresh   = "metadata_refresh"
 	ServiceMDBListSync       = "mdblist_sync"
 	ServiceCollectionSync    = "collection_sync"
 	ServiceEpisodeScan       = "episode_scan"
@@ -184,6 +185,7 @@ func InitializeDefaultServices() {
 	GlobalScheduler.Register(ServiceCacheCleanup, "Removes expired cache entries and old data", 1*time.Hour, true)
 	GlobalScheduler.Register(ServiceEPGUpdate, "Updates Electronic Program Guide data for Live TV", 6*time.Hour, true)
 	GlobalScheduler.Register(ServiceChannelRefresh, "Refreshes Live TV channel list from M3U sources", 1*time.Hour, true)
+	GlobalScheduler.Register(ServiceMetadataRefresh, "Refreshes TMDB metadata, artwork, keywords, and recommendation signals for library items", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceMDBListSync, "Syncs library with configured MDBList watchlists", 6*time.Hour, true)
 	GlobalScheduler.Register(ServiceCollectionSync, "Syncs incomplete movie collections", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceEpisodeScan, "Fetches episode metadata from TMDB for all series", 24*time.Hour, true)
