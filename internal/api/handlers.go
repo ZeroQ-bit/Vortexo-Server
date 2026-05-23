@@ -1012,15 +1012,18 @@ func (h *Handler) GetMediaVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sort videos: official trailers first, then teasers, then others
-	// Also prioritize YouTube videos
+	sortedVideos := sortMediaVideos(videos)
+
+	respondJSON(w, http.StatusOK, sortedVideos)
+}
+
+func sortMediaVideos(videos []services.Video) []services.Video {
 	sortedVideos := make([]services.Video, len(videos))
 	copy(sortedVideos, videos)
 
 	sort.SliceStable(sortedVideos, func(i, j int) bool {
 		vi, vj := sortedVideos[i], sortedVideos[j]
 
-		// YouTube videos first
 		if vi.Site == "YouTube" && vj.Site != "YouTube" {
 			return true
 		}
@@ -1028,7 +1031,6 @@ func (h *Handler) GetMediaVideos(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 
-		// Official videos first
 		if vi.Official && !vj.Official {
 			return true
 		}
@@ -1036,20 +1038,37 @@ func (h *Handler) GetMediaVideos(w http.ResponseWriter, r *http.Request) {
 			return false
 		}
 
-		// Trailers before teasers, teasers before others
-		typeOrder := map[string]int{"Trailer": 0, "Teaser": 1, "Clip": 2, "Featurette": 3, "Behind the Scenes": 4}
-		orderI, okI := typeOrder[vi.Type]
-		orderJ, okJ := typeOrder[vj.Type]
-		if !okI {
-			orderI = 99
+		typeI := mediaVideoTypeRank(vi.Type)
+		typeJ := mediaVideoTypeRank(vj.Type)
+		if typeI != typeJ {
+			return typeI < typeJ
 		}
-		if !okJ {
-			orderJ = 99
+
+		if vi.Size != vj.Size {
+			return vi.Size > vj.Size
 		}
-		return orderI < orderJ
+
+		return vi.Published > vj.Published
 	})
 
-	respondJSON(w, http.StatusOK, sortedVideos)
+	return sortedVideos
+}
+
+func mediaVideoTypeRank(videoType string) int {
+	switch videoType {
+	case "Trailer":
+		return 0
+	case "Teaser":
+		return 1
+	case "Clip":
+		return 2
+	case "Featurette":
+		return 3
+	case "Behind the Scenes":
+		return 4
+	default:
+		return 99
+	}
 }
 
 // PlayTrailer resolves a TMDB/YouTube trailer key to a direct media URL and redirects.
@@ -1102,18 +1121,52 @@ func resolveYouTubeTrailerURL(ctx context.Context, videoID string) (string, erro
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	var failures []string
+	for _, attempt := range youtubeTrailerFormatAttempts() {
+		playURL, err := resolveYouTubeTrailerURLWithYTDLP(ctx, videoID, attempt)
+		if err == nil {
+			log.Printf("Resolved trailer %s using %s stream", videoID, attempt.Name)
+			return playURL, nil
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", attempt.Name, err))
+	}
+
+	return "", fmt.Errorf("yt-dlp returned no playable url: %s", strings.Join(failures, "; "))
+}
+
+type youtubeTrailerFormatAttempt struct {
+	Name          string
+	Format        string
+	ExtractorArgs string
+}
+
+func youtubeTrailerFormatAttempts() []youtubeTrailerFormatAttempt {
+	return []youtubeTrailerFormatAttempt{
+		{
+			Name:          "hls",
+			Format:        "best[protocol^=m3u8][height<=1080][vcodec!=none][acodec!=none]/best[protocol^=m3u8][height<=1080]/best[protocol^=m3u8]",
+			ExtractorArgs: "youtube:player_client=ios,web",
+		},
+		{
+			Name:   "progressive",
+			Format: "best[height<=1080][ext=mp4][vcodec!=none][acodec!=none]/best[height<=1080][vcodec!=none][acodec!=none]/best",
+		},
+	}
+}
+
+func resolveYouTubeTrailerURLWithYTDLP(ctx context.Context, videoID string, attempt youtubeTrailerFormatAttempt) (string, error) {
 	watchURL := "https://www.youtube.com/watch?v=" + videoID
-	cmd := exec.CommandContext(
-		ctx,
-		"yt-dlp",
+	args := []string{
 		"--no-playlist",
 		"--no-warnings",
 		"--force-ipv4",
-		"-f",
-		"best[ext=mp4][height<=1080]/best[height<=1080]/best",
-		"-g",
-		watchURL,
-	)
+	}
+	if attempt.ExtractorArgs != "" {
+		args = append(args, "--extractor-args", attempt.ExtractorArgs)
+	}
+	args = append(args, "-f", attempt.Format, "-g", watchURL)
+
+	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -3880,7 +3933,7 @@ func (h *Handler) GetTMDBDetails(w http.ResponseWriter, r *http.Request) {
 	videos, err := h.tmdbClient.GetVideos(ctx, mediaType, tmdbID)
 	if err == nil {
 		response["videos"] = map[string]interface{}{
-			"results": videos,
+			"results": sortMediaVideos(videos),
 		}
 	}
 

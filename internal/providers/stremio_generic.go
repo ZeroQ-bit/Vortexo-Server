@@ -165,7 +165,7 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 	//   https://mediafusion.example/{encoded-config}/manifest.json
 	if configuredBase, ok := g.configuredAddonBaseURL(baseURL); ok {
 		if g.RealDebridAPIKey != "" && g.isTorrentio() && !strings.Contains(strings.ToLower(configuredBase), "realdebrid=") {
-			configuredBase += "|debridoptions=nodownloadlinks,nocatalog|realdebrid=" + g.RealDebridAPIKey
+			configuredBase += "|debridoptions=nocatalog|realdebrid=" + g.RealDebridAPIKey
 		}
 		return fmt.Sprintf("%s/%s", configuredBase, contentPath)
 	}
@@ -189,7 +189,7 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 	} else if g.isTorrentio() {
 		// Torrentio format with explicit quality filters
 		// Excludes: BRREMUX, all HDR, Dolby Vision, 3D, SCR (screener), CAM, TS/HDTS/TC (telecine), UNKNOWN
-		configPath := fmt.Sprintf("providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubs,nyaasi,tokyotosho,anidex|sort=qualitysize|qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,scr,cam,hdts,hd-ts,hdtc,hd-tc,ts,tc,unknown|debridoptions=nodownloadlinks,nocatalog|realdebrid=%s", g.RealDebridAPIKey)
+		configPath := fmt.Sprintf("providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubs,nyaasi,tokyotosho,anidex|sort=qualitysize|qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,scr,cam,hdts,hd-ts,hdtc,hd-tc,ts,tc,unknown|debridoptions=nocatalog|realdebrid=%s", g.RealDebridAPIKey)
 		return fmt.Sprintf("%s/%s/%s", g.BaseURL, configPath, contentPath)
 	} else if g.isMediaFusion() {
 		// MediaFusion format

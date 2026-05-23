@@ -1,6 +1,9 @@
 package providers
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 type fakeStreamProvider struct {
 	movieStreams  []TorrentioStream
@@ -63,9 +66,21 @@ func TestGenericStremioProviderPreservesConfiguredTorrentioURL(t *testing.T) {
 	)
 
 	got := provider.buildConfigURL("movie", "tt123", nil, nil)
-	want := "https://torrentio.strem.fun/sort=qualitysize|qualityfilter=threed,scr|debridoptions=nodownloadlinks,nocatalog|realdebrid=rd-token/stream/movie/tt123.json"
+	want := "https://torrentio.strem.fun/sort=qualitysize|qualityfilter=threed,scr|debridoptions=nocatalog|realdebrid=rd-token/stream/movie/tt123.json"
 	if got != want {
 		t.Fatalf("expected configured Torrentio URL to be preserved, got %q", got)
+	}
+}
+
+func TestGenericStremioProviderDefaultTorrentioAllowsDirectDownloadLinks(t *testing.T) {
+	provider := NewGenericStremioProvider("Torrentio", DefaultTorrentioAddonURL, "rd-token", nil)
+
+	got := provider.buildConfigURL("movie", "tt123", nil, nil)
+	if strings.Contains(got, "nodownloadlinks") {
+		t.Fatalf("expected default Torrentio config to allow direct download links, got %q", got)
+	}
+	if !strings.Contains(got, "debridoptions=nocatalog") {
+		t.Fatalf("expected default Torrentio config to keep nocatalog, got %q", got)
 	}
 }
 

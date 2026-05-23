@@ -689,12 +689,13 @@ func absInt(value int) int {
 func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream, req vortexoSourcesRequest) []vortexoSource {
 	sources := make([]vortexoSource, 0, len(providerStreams))
 	for _, stream := range providerStreams {
+		directURL := directVortexoPlaybackURL(stream.URL)
 		hash := stream.InfoHash
 		if !isValidHash(hash) && stream.URL != "" {
 			hash = extractHashFromURL(stream.URL)
 		}
 		hash = normalizeTorrentHash(hash)
-		if hash != "" && isVortexoSourceBlocked(hash) {
+		if directURL == "" && hash != "" && isVortexoSourceBlocked(hash) {
 			continue
 		}
 
@@ -703,7 +704,10 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			Title:   stream.Title,
 			FileIdx: stream.FileIdx,
 		}
-		if !isValidHash(hash) && stream.URL != "" {
+		if directURL != "" {
+			token.Hash = ""
+			token.URL = directURL
+		} else if !isValidHash(hash) && stream.URL != "" {
 			token.Hash = ""
 			token.URL = stream.URL
 		}
@@ -750,6 +754,16 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 	}
 
 	return sources
+}
+
+func directVortexoPlaybackURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	lowerURL := strings.ToLower(rawURL)
+	if strings.HasPrefix(lowerURL, "http://") || strings.HasPrefix(lowerURL, "https://") {
+		return rawURL
+	}
+
+	return ""
 }
 
 func markVortexoSourceBlocked(hash, reason string) {

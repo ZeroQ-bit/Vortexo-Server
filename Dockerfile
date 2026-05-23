@@ -62,9 +62,18 @@ RUN apt-get update && \
       rclone \
       tzdata \
       unzip \
-      wget \
-      yt-dlp && \
+      wget && \
     rm -rf /var/lib/apt/lists/*
+
+# Use the upstream yt-dlp binary instead of Debian's package so YouTube format
+# extraction stays current enough for trailer playback.
+RUN case "${TARGETARCH}" in \
+      amd64) YTDLP_BINARY="yt-dlp_linux" ;; \
+      arm64) YTDLP_BINARY="yt-dlp_linux_aarch64" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    wget -O /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/latest/download/${YTDLP_BINARY}" && \
+    chmod +x /usr/local/bin/yt-dlp
 
 # Install zurg public binary used for the internal RD mount helper
 RUN case "${TARGETARCH}" in \

@@ -311,32 +311,45 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		return "", fmt.Errorf("invalid torrent hash %q", truncateString(infoHash, 12))
 	}
 
-	// Build magnet link
-	magnetLink := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
-
-	// Add magnet to Real-Debrid
-	torrentID, err := c.AddMagnet(ctx, magnetLink)
+	info, torrentID, err := c.findTorrentInfoByHash(ctx, infoHash)
+	createdTorrent := false
 	if err != nil {
-		return "", fmt.Errorf("failed to add magnet: %w", err)
+		fmt.Printf("[RD-DEBUG] Existing torrent lookup failed for hash %s: %v\n", truncateString(infoHash, 12), err)
 	}
-	fmt.Printf("[RD-DEBUG] Added magnet, torrent ID: %s\n", torrentID)
+	if info != nil {
+		fmt.Printf("[RD-DEBUG] Using existing torrent %s for hash %s\n", torrentID, truncateString(infoHash, 12))
+	} else {
+		// Build magnet link
+		magnetLink := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
 
-	// Wait for torrent to be ready (cached torrents are instant)
-	time.Sleep(2 * time.Second)
+		// Add magnet to Real-Debrid
+		torrentID, err = c.AddMagnet(ctx, magnetLink)
+		if err != nil {
+			return "", fmt.Errorf("failed to add magnet: %w", err)
+		}
+		createdTorrent = true
+		fmt.Printf("[RD-DEBUG] Added magnet, torrent ID: %s\n", torrentID)
 
-	// Get torrent info to find the largest file
-	info, err := c.GetTorrentInfo(ctx, torrentID)
-	if err != nil {
-		// Clean up the torrent if we can't get info
-		_ = c.DeleteTorrent(ctx, torrentID)
-		return "", fmt.Errorf("failed to get torrent info: %w", err)
+		// Wait for torrent to be ready (cached torrents are instant)
+		time.Sleep(2 * time.Second)
+
+		// Get torrent info to find the largest file
+		info, err = c.GetTorrentInfo(ctx, torrentID)
+		if err != nil {
+			if createdTorrent {
+				_ = c.DeleteTorrent(ctx, torrentID)
+			}
+			return "", fmt.Errorf("failed to get torrent info: %w", err)
+		}
 	}
 	fmt.Printf("[RD-DEBUG] Torrent status: %s, Links: %d, Bytes: %d\n", info.Status, len(info.Links), info.Bytes)
 	targetFileID := chooseRDTorrentFileID(info, fileIndex, preferredName)
 
 	// Check if torrent is ready - should be "downloaded" for cached torrents
 	if info.Status != "downloaded" && info.Status != "waiting_files_selection" {
-		_ = c.DeleteTorrent(ctx, torrentID)
+		if createdTorrent {
+			_ = c.DeleteTorrent(ctx, torrentID)
+		}
 		return "", fmt.Errorf("torrent not cached (status: %s)", info.Status)
 	}
 
@@ -348,7 +361,9 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		}
 		fmt.Printf("[RD-DEBUG] Selecting files for torrent %s: %v\n", torrentID, fileIDs)
 		if err := c.SelectFiles(ctx, torrentID, fileIDs); err != nil {
-			_ = c.DeleteTorrent(ctx, torrentID)
+			if createdTorrent {
+				_ = c.DeleteTorrent(ctx, torrentID)
+			}
 			return "", fmt.Errorf("failed to select files: %w", err)
 		}
 		time.Sleep(1 * time.Second)
@@ -356,7 +371,9 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		// Refresh info
 		info, err = c.GetTorrentInfo(ctx, torrentID)
 		if err != nil {
-			_ = c.DeleteTorrent(ctx, torrentID)
+			if createdTorrent {
+				_ = c.DeleteTorrent(ctx, torrentID)
+			}
 			return "", fmt.Errorf("failed to refresh torrent info: %w", err)
 		}
 		fmt.Printf("[RD-DEBUG] After file selection - Status: %s, Links: %d\n", info.Status, len(info.Links))
@@ -367,20 +384,26 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		// If still not downloaded after selection, it's not cached - delete it
 		if info.Status != "downloaded" {
 			fmt.Printf("[RD-DEBUG] Torrent not instantly cached (status: %s), deleting...\n", info.Status)
-			_ = c.DeleteTorrent(ctx, torrentID)
+			if createdTorrent {
+				_ = c.DeleteTorrent(ctx, torrentID)
+			}
 			return "", fmt.Errorf("torrent not cached on RD (status: %s)", info.Status)
 		}
 	}
 
 	// Get the first link
 	if len(info.Links) == 0 {
-		_ = c.DeleteTorrent(ctx, torrentID)
+		if createdTorrent {
+			_ = c.DeleteTorrent(ctx, torrentID)
+		}
 		return "", fmt.Errorf("no download links available (status: %s)", info.Status)
 	}
 
 	link, err := chooseRDDownloadLink(info, targetFileID, fileIndex, preferredName)
 	if err != nil {
-		_ = c.DeleteTorrent(ctx, torrentID)
+		if createdTorrent {
+			_ = c.DeleteTorrent(ctx, torrentID)
+		}
 		return "", err
 	}
 
@@ -388,7 +411,9 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 	// Unrestrict the link to get direct download URL
 	unrestricted, err := c.UnrestrictLink(ctx, link)
 	if err != nil {
-		_ = c.DeleteTorrent(ctx, torrentID)
+		if createdTorrent {
+			_ = c.DeleteTorrent(ctx, torrentID)
+		}
 		return "", fmt.Errorf("failed to unrestrict link: %w", err)
 	}
 
@@ -401,6 +426,38 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 
 	fmt.Printf("[RD-DEBUG] Got link URL: %s\n", unrestricted.Link)
 	return unrestricted.Link, nil
+}
+
+func (c *RealDebridClient) findTorrentInfoByHash(ctx context.Context, infoHash string) (*rdTorrentInfo, string, error) {
+	infoHash = strings.ToLower(normalizeRealDebridHash(infoHash))
+	if infoHash == "" {
+		return nil, "", nil
+	}
+
+	const pageSize = 100
+	for page := 1; ; page++ {
+		torrents, err := c.ListTorrents(ctx, page, pageSize)
+		if err != nil {
+			return nil, "", err
+		}
+		for _, torrent := range torrents {
+			if strings.TrimSpace(torrent.ID) == "" {
+				continue
+			}
+			if strings.EqualFold(normalizeRealDebridHash(torrent.Hash), infoHash) {
+				info, err := c.GetTorrentInfo(ctx, torrent.ID)
+				if err != nil {
+					return nil, "", err
+				}
+				return info, torrent.ID, nil
+			}
+		}
+		if len(torrents) < pageSize {
+			break
+		}
+	}
+
+	return nil, "", nil
 }
 
 func chooseRDTorrentFileID(info *rdTorrentInfo, fileIndex int, preferredName string) int {
