@@ -107,6 +107,7 @@ func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 		"name":                          "Vortexo Server Sources",
 		"source_api":                    true,
 		"playback":                      true,
+		"subtitles":                     true,
 		"subtitle_translation":          true,
 		"subtitle_translation_provider": h.configuredSubtitleTranslationProvider(),
 		"types":                         []string{"movie", "episode"},
@@ -245,6 +246,50 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, streamURL, http.StatusFound)
 }
 
+// VortexoSubtitle fetches an OpenSubtitles track for a private-client media
+// token. The token is metadata-only, so source-addon playback can still use
+// server-side subtitles even when the item is not in the Xtream library.
+func (h *Handler) VortexoSubtitle(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	req, err := decodeVortexoSubtitleToken(vars["token"])
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid subtitle token")
+		return
+	}
+
+	language := strings.TrimSpace(vars["lang"])
+	format := strings.ToLower(strings.TrimSpace(vars["format"]))
+	if format == "" {
+		format = "vtt"
+	}
+	if format != "vtt" && format != "srt" {
+		respondError(w, http.StatusBadRequest, "unsupported subtitle format")
+		return
+	}
+
+	cfg := h.currentVortexoOpenSubtitlesConfig()
+	if !cfg.Ready() {
+		respondError(w, http.StatusServiceUnavailable, "OpenSubtitles is not configured")
+		return
+	}
+
+	search, err := h.vortexoOpenSubtitlesSearchRequest(r.Context(), req, language, format)
+	if err != nil {
+		log.Printf("[Vortexo] Subtitle metadata lookup failed: %v", err)
+		respondError(w, http.StatusNotFound, "subtitle metadata not found")
+		return
+	}
+
+	subtitle, err := services.NewOpenSubtitlesClient(cfg).FetchSubtitle(r.Context(), search)
+	if err != nil {
+		log.Printf("[Vortexo] OpenSubtitles lookup failed type=%s title=%q lang=%s: %v", req.Type, req.Title, language, err)
+		respondError(w, http.StatusNotFound, "subtitle not found")
+		return
+	}
+
+	writeVortexoSubtitleResponse(w, subtitle)
+}
+
 // VortexoTranslateSubtitle translates short embedded subtitle cues through the
 // user's configured server-side translation provider. If no provider is
 // configured, the original text is returned so clients can safely fall back.
@@ -374,6 +419,88 @@ func (h *Handler) translateSubtitleCueWithLibreTranslate(ctx context.Context, ba
 	}
 
 	return decoded.TranslatedText, "libretranslate", nil
+}
+
+func (h *Handler) currentVortexoOpenSubtitlesConfig() services.OpenSubtitlesConfig {
+	cfg := services.OpenSubtitlesConfig{
+		Enabled:   strings.EqualFold(os.Getenv("OPENSUBTITLES_ENABLED"), "true"),
+		APIKey:    os.Getenv("OPENSUBTITLES_API_KEY"),
+		Username:  os.Getenv("OPENSUBTITLES_USERNAME"),
+		Password:  os.Getenv("OPENSUBTITLES_PASSWORD"),
+		Languages: os.Getenv("OPENSUBTITLES_LANGUAGES"),
+		UserAgent: os.Getenv("OPENSUBTITLES_USER_AGENT"),
+		BaseURL:   os.Getenv("OPENSUBTITLES_BASE_URL"),
+	}
+
+	if h != nil && h.settingsManager != nil {
+		settings := h.settingsManager.Get()
+		cfg.Enabled = settings.OpenSubtitlesEnabled
+		cfg.APIKey = settings.OpenSubtitlesAPIKey
+		cfg.Username = settings.OpenSubtitlesUsername
+		cfg.Password = settings.OpenSubtitlesPassword
+		cfg.Languages = settings.OpenSubtitlesLanguages
+	}
+
+	if strings.TrimSpace(cfg.Languages) == "" {
+		cfg.Languages = "en"
+	}
+	return cfg
+}
+
+func (h *Handler) vortexoOpenSubtitlesSearchRequest(
+	ctx context.Context,
+	req vortexoSourcesRequest,
+	language string,
+	format string,
+) (services.OpenSubtitlesSearchRequest, error) {
+	req.Type = normalizeVortexoType(req.Type)
+	if req.Type == "" {
+		return services.OpenSubtitlesSearchRequest{}, fmt.Errorf("missing media type")
+	}
+
+	resolvedIMDBID, resolvedYear, err := h.resolveVortexoIMDBID(ctx, req)
+	if err != nil {
+		return services.OpenSubtitlesSearchRequest{}, err
+	}
+
+	switch req.Type {
+	case "movie":
+		return services.OpenSubtitlesSearchRequest{
+			Type:     "movie",
+			IMDBID:   resolvedIMDBID,
+			TMDBID:   req.TMDBID,
+			Query:    req.Title,
+			Year:     firstNonZero(req.Year, resolvedYear),
+			Language: language,
+			Format:   format,
+		}, nil
+	case "episode":
+		if req.Season <= 0 || req.Episode <= 0 {
+			return services.OpenSubtitlesSearchRequest{}, fmt.Errorf("missing season/episode")
+		}
+		return services.OpenSubtitlesSearchRequest{
+			Type:         "episode",
+			ParentIMDBID: resolvedIMDBID,
+			ParentTMDBID: req.TMDBID,
+			Query:        firstNonEmpty(req.ParentTitle, req.Title),
+			Season:       req.Season,
+			Episode:      req.Episode,
+			Language:     language,
+			Format:       format,
+		}, nil
+	default:
+		return services.OpenSubtitlesSearchRequest{}, fmt.Errorf("unsupported media type")
+	}
+}
+
+func writeVortexoSubtitleResponse(w http.ResponseWriter, subtitle *services.OpenSubtitlesFetchedSubtitle) {
+	w.Header().Set("Content-Type", subtitle.ContentType)
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if subtitle.FileName != "" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", subtitle.FileName))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(subtitle.Content)
 }
 
 func (h *Handler) subtitleTranslationConfig() (string, string) {
@@ -1129,6 +1256,30 @@ func decodeVortexoPlayToken(value string) (vortexoPlayToken, error) {
 		return token, fmt.Errorf("empty token")
 	}
 	return token, nil
+}
+
+func encodeVortexoSubtitleToken(req vortexoSourcesRequest) (string, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func decodeVortexoSubtitleToken(value string) (vortexoSourcesRequest, error) {
+	var req vortexoSourcesRequest
+	data, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return req, err
+	}
+	if err := json.Unmarshal(data, &req); err != nil {
+		return req, err
+	}
+	req.Type = normalizeVortexoType(req.Type)
+	if req.Type == "" {
+		return req, fmt.Errorf("empty subtitle token")
+	}
+	return req, nil
 }
 
 func vortexoSourceLabel(parts ...string) string {

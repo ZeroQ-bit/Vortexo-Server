@@ -156,6 +156,36 @@ func TestApplyVortexoCacheAvailabilityOverridesProviderCachedFlag(t *testing.T) 
 	}
 }
 
+func TestEncodeDecodeVortexoSubtitleToken(t *testing.T) {
+	want := vortexoSourcesRequest{
+		Type:    "movie",
+		Title:   "Lee Cronin's The Mummy",
+		Year:    2026,
+		TMDBID:  1304313,
+		IMDBID:  "tt1234567",
+		Season:  0,
+		Episode: 0,
+	}
+
+	token, err := encodeVortexoSubtitleToken(want)
+	if err != nil {
+		t.Fatalf("encodeVortexoSubtitleToken failed: %v", err)
+	}
+
+	got, err := decodeVortexoSubtitleToken(token)
+	if err != nil {
+		t.Fatalf("decodeVortexoSubtitleToken failed: %v", err)
+	}
+
+	if got.Type != want.Type ||
+		got.Title != want.Title ||
+		got.Year != want.Year ||
+		got.TMDBID != want.TMDBID ||
+		got.IMDBID != want.IMDBID {
+		t.Fatalf("decoded token = %#v, want %#v", got, want)
+	}
+}
+
 func TestWantsVortexoPlayJSON(t *testing.T) {
 	req, err := http.NewRequest("GET", "/api/v1/vortexo/play/token", nil)
 	if err != nil {
