@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -105,6 +106,31 @@ func TestBuildVortexoSourcesPrefersDirectURLWhenHashPresent(t *testing.T) {
 	}
 	if token.Hash != "" {
 		t.Fatalf("token.Hash = %q, want empty when direct URL is available", token.Hash)
+	}
+	if sources[0].DirectURL != directURL {
+		t.Fatalf("source.DirectURL = %q, want %q", sources[0].DirectURL, directURL)
+	}
+	if sources[0].DownloadURL != directURL {
+		t.Fatalf("source.DownloadURL = %q, want %q", sources[0].DownloadURL, directURL)
+	}
+}
+
+func TestWantsVortexoPlayJSON(t *testing.T) {
+	req, err := http.NewRequest("GET", "/api/v1/vortexo/play/token", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
+	req.Header.Set("Accept", "application/json,video/*,*/*;q=0.8")
+	if !wantsVortexoPlayJSON(req) {
+		t.Fatal("expected JSON accept header to request JSON playback response")
+	}
+
+	req, err = http.NewRequest("GET", "/api/v1/vortexo/play/token?format=json", nil)
+	if err != nil {
+		t.Fatalf("NewRequest failed: %v", err)
+	}
+	if !wantsVortexoPlayJSON(req) {
+		t.Fatal("expected format=json to request JSON playback response")
 	}
 }
 

@@ -50,6 +50,8 @@ type vortexoSource struct {
 	Season       int     `json:"season,omitempty"`
 	Episode      int     `json:"episode,omitempty"`
 	PlayURL      string  `json:"play_url"`
+	DirectURL    string  `json:"direct_url,omitempty"`
+	DownloadURL  string  `json:"download_url,omitempty"`
 }
 
 type vortexoPlayToken struct {
@@ -193,6 +195,10 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if token.URL != "" && token.Hash == "" {
+		if wantsVortexoPlayJSON(r) {
+			respondVortexoPlaybackURL(w, token.URL)
+			return
+		}
 		http.Redirect(w, r, token.URL, http.StatusFound)
 		return
 	}
@@ -208,7 +214,7 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
 	streamURL, err := h.rdClient.GetStreamURLForFile(ctx, token.Hash, token.FileIdx, token.Title)
@@ -223,6 +229,10 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if wantsVortexoPlayJSON(r) {
+		respondVortexoPlaybackURL(w, streamURL)
+		return
+	}
 	http.Redirect(w, r, streamURL, http.StatusFound)
 }
 
@@ -745,6 +755,10 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			FileName:     stream.Title,
 			PlayURL:      "/api/v1/vortexo/play/" + id,
 		}
+		if directURL != "" {
+			source.DirectURL = directURL
+			source.DownloadURL = directURL
+		}
 		if req.Type == "episode" {
 			source.Season = req.Season
 			source.Episode = req.Episode
@@ -764,6 +778,35 @@ func directVortexoPlaybackURL(rawURL string) string {
 	}
 
 	return ""
+}
+
+func wantsVortexoPlayJSON(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format"))) {
+	case "json", "direct", "url":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("resolve"))) {
+	case "1", "true", "yes", "json":
+		return true
+	}
+
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(accept, "application/json")
+}
+
+func respondVortexoPlaybackURL(w http.ResponseWriter, streamURL string) {
+	w.Header().Set("Cache-Control", "no-store")
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"url":          streamURL,
+		"stream_url":   streamURL,
+		"direct_url":   streamURL,
+		"download_url": streamURL,
+		"download":     streamURL,
+	})
 }
 
 func markVortexoSourceBlocked(hash, reason string) {

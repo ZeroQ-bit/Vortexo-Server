@@ -311,10 +311,12 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		return "", fmt.Errorf("invalid torrent hash %q", truncateString(infoHash, 12))
 	}
 
-	info, torrentID, err := c.findTorrentInfoByHash(ctx, infoHash)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, 8*time.Second)
+	info, torrentID, err := c.findTorrentInfoByHash(lookupCtx, infoHash)
+	cancelLookup()
 	createdTorrent := false
 	if err != nil {
-		fmt.Printf("[RD-DEBUG] Existing torrent lookup failed for hash %s: %v\n", truncateString(infoHash, 12), err)
+		fmt.Printf("[RD-DEBUG] Existing torrent lookup skipped/failed for hash %s: %v\n", truncateString(infoHash, 12), err)
 	}
 	if info != nil {
 		fmt.Printf("[RD-DEBUG] Using existing torrent %s for hash %s\n", torrentID, truncateString(infoHash, 12))
@@ -435,7 +437,11 @@ func (c *RealDebridClient) findTorrentInfoByHash(ctx context.Context, infoHash s
 	}
 
 	const pageSize = 100
-	for page := 1; ; page++ {
+	const maxPlaybackLookupPages = 3
+	for page := 1; page <= maxPlaybackLookupPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		torrents, err := c.ListTorrents(ctx, page, pageSize)
 		if err != nil {
 			return nil, "", err
