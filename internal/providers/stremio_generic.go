@@ -157,7 +157,7 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 		contentPath = fmt.Sprintf("stream/movie/%s.json", imdbID)
 	}
 
-	baseURL := strings.TrimRight(g.BaseURL, "/")
+	baseURL := normalizeAddonBaseURL(g.BaseURL)
 
 	// If the user pasted a configured addon URL, keep that configuration.
 	// Examples:
@@ -165,7 +165,7 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 	//   https://mediafusion.example/{encoded-config}/manifest.json
 	if configuredBase, ok := g.configuredAddonBaseURL(baseURL); ok {
 		if g.RealDebridAPIKey != "" && g.isTorrentio() && !strings.Contains(strings.ToLower(configuredBase), "realdebrid=") {
-			configuredBase += "|debridoptions=nocatalog|realdebrid=" + g.RealDebridAPIKey
+			configuredBase = appendTorrentioConfig(configuredBase, "debridoptions=nocatalog|realdebrid="+g.RealDebridAPIKey)
 		}
 		return fmt.Sprintf("%s/%s", configuredBase, contentPath)
 	}
@@ -190,7 +190,7 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 		// Torrentio format with explicit quality filters
 		// Excludes: BRREMUX, all HDR, Dolby Vision, 3D, SCR (screener), CAM, TS/HDTS/TC (telecine), UNKNOWN
 		configPath := fmt.Sprintf("providers=yts,eztv,rarbg,1337x,thepiratebay,kickasstorrents,torrentgalaxy,magnetdl,horriblesubs,nyaasi,tokyotosho,anidex|sort=qualitysize|qualityfilter=brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,scr,cam,hdts,hd-ts,hdtc,hd-tc,ts,tc,unknown|debridoptions=nocatalog|realdebrid=%s", g.RealDebridAPIKey)
-		return fmt.Sprintf("%s/%s/%s", g.BaseURL, configPath, contentPath)
+		return fmt.Sprintf("%s/%s/%s", baseURL, configPath, contentPath)
 	} else if g.isMediaFusion() {
 		// MediaFusion format
 		config := map[string]interface{}{
@@ -212,7 +212,33 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 	}
 
 	configBase64 := base64.StdEncoding.EncodeToString(configJSON)
-	return fmt.Sprintf("%s/%s/%s", g.BaseURL, configBase64, contentPath)
+	return fmt.Sprintf("%s/%s/%s", baseURL, configBase64, contentPath)
+}
+
+func normalizeAddonBaseURL(rawURL string) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+
+	for _, hostPrefix := range []string{
+		"https://torrentio.strem.fun|",
+		"http://torrentio.strem.fun|",
+	} {
+		if strings.HasPrefix(strings.ToLower(baseURL), hostPrefix) {
+			return baseURL[:len(hostPrefix)-1] + "/" + baseURL[len(hostPrefix):]
+		}
+	}
+
+	return baseURL
+}
+
+func appendTorrentioConfig(baseURL, config string) string {
+	trimmedBase := strings.TrimRight(baseURL, "/")
+
+	parsed, err := url.Parse(trimmedBase)
+	if err == nil && strings.Trim(parsed.EscapedPath(), "/") == "" {
+		return trimmedBase + "/" + config
+	}
+
+	return trimmedBase + "|" + config
 }
 
 func (g *GenericStremioProvider) configuredAddonBaseURL(baseURL string) (string, bool) {

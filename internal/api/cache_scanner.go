@@ -190,13 +190,11 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 			providerStreams, err := provider.GetMovieStreamsWithYear(imdbID, releaseYear)
 			if err != nil {
 				log.Printf("[CACHE-SCANNER] Error fetching streams for %s (%s): %v", movie.Title, imdbID, err)
-				// On error, wait longer before continuing
-				if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "too_many_requests") {
-					log.Printf("[CACHE-SCANNER] Rate limit hit, waiting 30 seconds...")
-					time.Sleep(30 * time.Second)
-				} else {
-					time.Sleep(5 * time.Second)
+				if isProviderRateLimitError(err) {
+					log.Printf("[CACHE-SCANNER] Provider rate limit hit; pausing this cache scan so playback requests can recover")
+					return nil
 				}
+				time.Sleep(5 * time.Second)
 				errors++
 				continue
 			}
@@ -402,6 +400,10 @@ func (cs *CacheScanner) scanSeries(ctx context.Context) (int, int, int) {
 				if err != nil {
 					log.Printf("[CACHE-SCANNER] Error scanning %s S%02dE%02d: %v", s.Title, ep.SeasonNumber, ep.EpisodeNumber, err)
 					errors++
+					if isProviderRateLimitError(err) {
+						log.Printf("[CACHE-SCANNER] Provider rate limit hit; pausing series scan")
+						return scanned, cached, errors
+					}
 					continue
 				}
 				if cachedEpisode {
@@ -482,10 +484,7 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 	time.Sleep(2 * time.Second)
 	providerStreams, err := provider.GetSeriesStreams(imdbID, season, episode)
 	if err != nil {
-		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "too_many_requests") {
-			log.Printf("[CACHE-SCANNER] Rate limit hit while scanning series episodes, waiting 30 seconds...")
-			time.Sleep(30 * time.Second)
-		} else {
+		if !isProviderRateLimitError(err) {
 			time.Sleep(5 * time.Second)
 		}
 		return false, fmt.Errorf("fetch streams: %w", err)
@@ -608,6 +607,17 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 		s.Title, season, episode, parsed.Resolution, qualityScore)
 
 	return true, nil
+}
+
+func isProviderRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "429") ||
+		strings.Contains(message, "too_many_requests") ||
+		strings.Contains(message, "too many requests") ||
+		strings.Contains(message, "rate limited")
 }
 
 func bestTorrentioStream(streamService *streams.StreamService, providerStreams []providers.TorrentioStream) (*providers.TorrentioStream, int) {

@@ -84,6 +84,36 @@ func TestGenericStremioProviderDefaultTorrentioAllowsDirectDownloadLinks(t *test
 	}
 }
 
+func TestGenericStremioProviderRootTorrentioManifestAddsConfigPath(t *testing.T) {
+	provider := NewGenericStremioProvider(
+		"Torrentio",
+		"https://torrentio.strem.fun/manifest.json",
+		"rd-token",
+		nil,
+	)
+
+	got := provider.buildConfigURL("movie", "tt123", nil, nil)
+	want := "https://torrentio.strem.fun/debridoptions=nocatalog|realdebrid=rd-token/stream/movie/tt123.json"
+	if got != want {
+		t.Fatalf("expected root manifest URL to insert config path, got %q", got)
+	}
+}
+
+func TestGenericStremioProviderRepairsTorrentioPipeAfterHost(t *testing.T) {
+	provider := NewGenericStremioProvider(
+		"Torrentio",
+		"https://torrentio.strem.fun|debridoptions=nocatalog|realdebrid=rd-token/manifest.json",
+		"rd-token",
+		nil,
+	)
+
+	got := provider.buildConfigURL("series", "tt123", intPtr(2), intPtr(5))
+	want := "https://torrentio.strem.fun/debridoptions=nocatalog|realdebrid=rd-token/stream/series/tt123:2:5.json"
+	if got != want {
+		t.Fatalf("expected malformed Torrentio URL to be repaired, got %q", got)
+	}
+}
+
 func TestGenericStremioProviderRewritesManifestURL(t *testing.T) {
 	provider := NewGenericStremioProvider(
 		"MediaFusion",
