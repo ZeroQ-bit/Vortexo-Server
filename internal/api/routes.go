@@ -191,7 +191,7 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	api.HandleFunc("/auth/password", handler.ChangePassword).Methods("PUT")
 
 	// Health check
-	api.HandleFunc("/health", handler.HealthCheck).Methods("GET")
+	api.HandleFunc("/health", handler.HealthCheck).Methods("GET", "HEAD")
 
 	// Trakt import/sync
 	api.HandleFunc("/trakt/status", handler.TraktStatus).Methods("GET")
