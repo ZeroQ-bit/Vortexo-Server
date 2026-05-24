@@ -114,6 +114,29 @@ func TestGenericStremioProviderRepairsTorrentioPipeAfterHost(t *testing.T) {
 	}
 }
 
+func TestNormalizeAddonURLRepairsEncodedTorrentioPipeAfterHost(t *testing.T) {
+	got := NormalizeAddonURL("stremio://torrentio.strem.fun%7Cdebridoptions=nocatalog%7Crealdebrid=rd-token/manifest.json/")
+	want := "https://torrentio.strem.fun/debridoptions=nocatalog%7Crealdebrid=rd-token/manifest.json"
+	if got != want {
+		t.Fatalf("expected encoded Torrentio host pipe to be repaired, got %q", got)
+	}
+}
+
+func TestNormalizeEnabledAddonsRepairsSavedTorrentioURL(t *testing.T) {
+	addons := normalizeEnabledAddons([]StremioAddon{{
+		Name:    "Torrentio",
+		URL:     "https://torrentio.strem.fun|debridoptions=nocatalog|realdebrid=rd-token/manifest.json",
+		Enabled: true,
+	}})
+
+	if len(addons) != 1 {
+		t.Fatalf("expected normalized addon, got %d", len(addons))
+	}
+	if strings.Contains(addons[0].URL, "strem.fun|") {
+		t.Fatalf("expected saved Torrentio URL to be repaired, got %q", addons[0].URL)
+	}
+}
+
 func TestGenericStremioProviderRewritesManifestURL(t *testing.T) {
 	provider := NewGenericStremioProvider(
 		"MediaFusion",

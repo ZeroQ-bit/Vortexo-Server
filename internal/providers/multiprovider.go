@@ -153,7 +153,7 @@ func normalizeEnabledAddons(addons []StremioAddon) []StremioAddon {
 			continue
 		}
 
-		trimmedURL := strings.TrimRight(strings.TrimSpace(addon.URL), "/")
+		trimmedURL := NormalizeAddonURL(addon.URL)
 		if trimmedURL == "" {
 			continue
 		}

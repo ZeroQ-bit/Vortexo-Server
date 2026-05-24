@@ -28,6 +28,8 @@ type GenericStremioProvider struct {
 	proxyURLs        []string      // List of proxy URLs for rotation
 	proxyIndex       int           // Current proxy index for round-robin
 	proxyMu          sync.Mutex    // Mutex for proxy rotation
+	cooldownMu       sync.Mutex
+	cooldownUntil    time.Time
 }
 
 type GenericStreamCachedResponse struct {
@@ -74,7 +76,7 @@ func NewGenericStremioProvider(name, baseURL, rdAPIKey string, proxies []string)
 
 	provider := &GenericStremioProvider{
 		Name:             name,
-		BaseURL:          baseURL,
+		BaseURL:          NormalizeAddonURL(baseURL),
 		RealDebridAPIKey: rdAPIKey,
 		Cache:            make(map[string]*GenericStreamCachedResponse),
 		rateLimiter:      make(chan struct{}, 2),
@@ -148,6 +150,34 @@ func (g *GenericStremioProvider) rotateProxy() {
 	g.proxyMu.Unlock()
 }
 
+const genericStremioRateLimitCooldown = 10 * time.Minute
+
+func (g *GenericStremioProvider) activeCooldown() (time.Duration, bool) {
+	g.cooldownMu.Lock()
+	defer g.cooldownMu.Unlock()
+
+	if g.cooldownUntil.IsZero() {
+		return 0, false
+	}
+
+	remaining := time.Until(g.cooldownUntil)
+	if remaining <= 0 {
+		g.cooldownUntil = time.Time{}
+		return 0, false
+	}
+
+	return remaining, true
+}
+
+func (g *GenericStremioProvider) recordRateLimitCooldown() {
+	g.cooldownMu.Lock()
+	g.cooldownUntil = time.Now().Add(genericStremioRateLimitCooldown)
+	until := g.cooldownUntil
+	g.cooldownMu.Unlock()
+
+	log.Printf("[RATE-LIMIT] %s cooling down until %s", g.Name, until.Format(time.RFC3339))
+}
+
 // buildConfigURL builds the appropriate URL based on addon type
 func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, season, episode *int) string {
 	var contentPath string
@@ -216,7 +246,15 @@ func (g *GenericStremioProvider) buildConfigURL(contentType, imdbID string, seas
 }
 
 func normalizeAddonBaseURL(rawURL string) string {
+	return NormalizeAddonURL(rawURL)
+}
+
+func NormalizeAddonURL(rawURL string) string {
 	baseURL := strings.TrimRight(strings.TrimSpace(rawURL), "/")
+
+	if strings.HasPrefix(strings.ToLower(baseURL), "stremio://") {
+		baseURL = "https://" + baseURL[len("stremio://"):]
+	}
 
 	for _, hostPrefix := range []string{
 		"https://torrentio.strem.fun|",
@@ -224,6 +262,31 @@ func normalizeAddonBaseURL(rawURL string) string {
 	} {
 		if strings.HasPrefix(strings.ToLower(baseURL), hostPrefix) {
 			return baseURL[:len(hostPrefix)-1] + "/" + baseURL[len(hostPrefix):]
+		}
+	}
+
+	for _, hostPrefix := range []string{
+		"https://torrentio.strem.fun%7c",
+		"http://torrentio.strem.fun%7c",
+	} {
+		if strings.HasPrefix(strings.ToLower(baseURL), hostPrefix) {
+			return baseURL[:len(hostPrefix)-3] + "/" + baseURL[len(hostPrefix):]
+		}
+	}
+
+	for _, hostPrefix := range []string{
+		"https://torrentio.strem.fun/|",
+		"http://torrentio.strem.fun/|",
+		"https://torrentio.strem.fun/%7c",
+		"http://torrentio.strem.fun/%7c",
+	} {
+		if strings.HasPrefix(strings.ToLower(baseURL), hostPrefix) {
+			pipeLen := 1
+			if strings.HasSuffix(strings.ToLower(hostPrefix), "%7c") {
+				pipeLen = 3
+			}
+			hostEnd := strings.LastIndex(hostPrefix, "/")
+			return baseURL[:hostEnd+1] + baseURL[len(hostPrefix)-pipeLen+pipeLen:]
 		}
 	}
 
@@ -300,6 +363,10 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 		}
 	}
 
+	if remaining, ok := g.activeCooldown(); ok {
+		return nil, fmt.Errorf("provider %s is cooling down after a rate limit; retry after %s", g.Name, remaining.Round(time.Second))
+	}
+
 	// Rate limiting: max 2 concurrent requests to avoid overwhelming the addon
 	g.rateLimiter <- struct{}{}        // Acquire
 	defer func() { <-g.rateLimiter }() // Release
@@ -333,23 +400,26 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 			g.rotateProxy() // Try different proxy on connection error
 			continue
 		}
-		defer resp.Body.Close()
 
 		// Retry on 429 (rate limit) or 503 (service unavailable)
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			resp.Body.Close()
 			lastErr = fmt.Errorf("rate limited/service unavailable: %d", resp.StatusCode)
 			g.rotateProxy() // Switch to next proxy on rate limit
 			if attempt < maxRetries-1 {
 				continue
 			}
+			g.recordRateLimitCooldown()
 			return nil, lastErr
 		}
 
 		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
 			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 
 		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
@@ -369,6 +439,7 @@ func (g *GenericStremioProvider) fetchStreams(url, cacheKey string) ([]Torrentio
 					if attempt < maxRetries-1 {
 						continue
 					}
+					g.recordRateLimitCooldown()
 				}
 				return nil, lastErr
 			}

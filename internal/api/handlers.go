@@ -1188,6 +1188,41 @@ func resolveYouTubeTrailerURLWithYTDLP(ctx context.Context, videoID string, atte
 	return "", fmt.Errorf("yt-dlp returned no playable url")
 }
 
+func cachedStreamAPIObject(cached *models.CachedStream) map[string]interface{} {
+	if cached == nil {
+		return nil
+	}
+
+	qualityLabel := strings.Join(strings.Fields(strings.TrimSpace(fmt.Sprintf("%s %s %s", cached.Resolution, cached.HDRType, cached.AudioFormat))), " ")
+	if qualityLabel == "" {
+		qualityLabel = "Cached"
+	}
+
+	return map[string]interface{}{
+		"title":         fmt.Sprintf("[CACHED] %s", qualityLabel),
+		"name":          fmt.Sprintf("[CACHED] %s", qualityLabel),
+		"filename":      fmt.Sprintf("[CACHED] %s", qualityLabel),
+		"url":           cached.StreamURL,
+		"quality":       cached.Resolution,
+		"codec":         cached.Codec,
+		"size_gb":       cached.FileSizeGB,
+		"source":        firstNonEmptyString(cached.Indexer, "Server Cache"),
+		"cached":        true,
+		"quality_score": cached.QualityScore,
+		"last_checked":  cached.LastChecked,
+		"indexer":       cached.Indexer,
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // GetMovieStreams handles GET /api/movies/{id}/streams
 func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -1207,18 +1242,7 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[CACHE-HIT] ⚡ Cached stream available for movie %d (quality: %d, checked: %v ago)",
 				id, cached.QualityScore, time.Since(cached.LastChecked).Round(time.Minute))
 
-			// Prepare cached stream in API format (will be returned with live streams)
-			cachedStreamObj = map[string]interface{}{
-				"title":         fmt.Sprintf("⚡ [CACHED] %s %s %s", cached.Resolution, cached.HDRType, cached.AudioFormat),
-				"url":           cached.StreamURL,
-				"quality":       cached.Resolution,
-				"size_gb":       cached.FileSizeGB,
-				"source":        "Phase1-Cache",
-				"cached":        true,
-				"quality_score": cached.QualityScore,
-				"last_checked":  cached.LastChecked,
-				"indexer":       cached.Indexer,
-			}
+			cachedStreamObj = cachedStreamAPIObject(cached)
 		}
 	}
 
@@ -1288,6 +1312,11 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	providerStreams, err := h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get streams for movie %d (%s, %s): %v", id, movie.Title, imdbID, err)
+		if cachedStreamObj != nil {
+			log.Printf("[STREAMS] Returning cached movie stream for %d because live provider lookup failed", id)
+			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
+			return
+		}
 		respondJSON(w, http.StatusOK, []interface{}{}) // Return empty array instead of error
 		return
 	}
@@ -1614,9 +1643,25 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var cachedStreamObj map[string]interface{}
+	if h.streamCacheStore != nil && series != nil {
+		cached, cacheErr := h.streamCacheStore.GetCachedSeriesEpisode(ctx, int(series.ID), season, episode)
+		if cacheErr != nil {
+			log.Printf("[CACHE-HIT] Failed checking cached series stream for %s S%02dE%02d: %v", imdbID, season, episode, cacheErr)
+		} else if cached != nil && cached.IsAvailable {
+			log.Printf("[CACHE-HIT] Cached stream available for series %s S%02dE%02d (quality: %d, checked: %v ago)",
+				imdbID, season, episode, cached.QualityScore, time.Since(cached.LastChecked).Round(time.Minute))
+			cachedStreamObj = cachedStreamAPIObject(cached)
+		}
+	}
+
 	// Fetch live streams from providers
 	if h.streamProvider == nil {
 		log.Printf("Stream provider not configured")
+		if cachedStreamObj != nil {
+			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
+			return
+		}
 		respondError(w, http.StatusServiceUnavailable, "stream provider not configured")
 		return
 	}
@@ -1625,6 +1670,11 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 	providerStreams, err := h.streamProvider.GetSeriesStreams(imdbID, season, episode)
 	if err != nil {
 		log.Printf("Failed to get streams for series %s S%02dE%02d: %v", imdbID, season, episode, err)
+		if cachedStreamObj != nil {
+			log.Printf("[STREAMS] Returning cached series stream for %s S%02dE%02d because live provider lookup failed", imdbID, season, episode)
+			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
+			return
+		}
 		respondJSON(w, http.StatusOK, []interface{}{}) // Return empty array instead of error
 		return
 	}
@@ -1671,6 +1721,16 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 			"filename": ps.Title, // Use title as filename for display
 		}
 		apiStreams = append(apiStreams, stream)
+	}
+
+	if cachedStreamObj != nil {
+		allStreams := make([]interface{}, 0, len(apiStreams)+1)
+		allStreams = append(allStreams, cachedStreamObj)
+		for _, s := range apiStreams {
+			allStreams = append(allStreams, s)
+		}
+		respondJSON(w, http.StatusOK, allStreams)
+		return
 	}
 
 	respondJSON(w, http.StatusOK, apiStreams)

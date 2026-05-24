@@ -54,6 +54,33 @@ func (s *StreamCacheStore) GetCachedStream(ctx context.Context, movieID int) (*m
 	return cached, nil
 }
 
+// GetCachedSeriesEpisode retrieves the cached stream for a specific series episode.
+// Returns nil if no cached stream exists.
+func (s *StreamCacheStore) GetCachedSeriesEpisode(ctx context.Context, seriesID, season, episode int) (*models.CachedStream, error) {
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_streams
+		WHERE series_id = $1
+		  AND season = $2
+		  AND episode = $3
+		  AND is_available = true
+		ORDER BY quality_score DESC, updated_at DESC
+		LIMIT 1
+	`, cachedStreamSelectColumns)
+
+	cached := &models.CachedStream{}
+	err := scanCachedStream(s.db.QueryRowContext(ctx, query, seriesID, season, episode), cached)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cached series episode stream: %w", err)
+	}
+
+	return cached, nil
+}
+
 // CacheStream stores or updates the cached stream for a media item
 // Replaces existing stream if one exists (one stream per media)
 func (s *StreamCacheStore) CacheStream(ctx context.Context, movieID int, stream models.TorrentStream, streamURL string) error {
