@@ -263,14 +263,15 @@ func (h *Handler) vortexoHomeContext(
 }
 
 type vortexoHomeShowProgress struct {
-	tmdbID        int
-	imdbID        string
-	title         string
-	year          int
-	latestAt      time.Time
-	latestSeason  int
-	latestEpisode int
-	watched       map[[2]int]bool
+	tmdbID          int
+	imdbID          string
+	title           string
+	year            int
+	latestAt        time.Time
+	latestEpisodeAt time.Time
+	latestSeason    int
+	latestEpisode   int
+	watched         map[[2]int]bool
 }
 
 func (h *Handler) vortexoHomeUpNextCandidates(
@@ -316,13 +317,16 @@ func (h *Handler) vortexoHomeUpNextCandidates(
 		}
 		if entry.WatchedAt.After(progress.latestAt) {
 			progress.latestAt = entry.WatchedAt
-			if entry.SeasonNumber > 0 && entry.EpisodeNumber > 0 {
-				progress.latestSeason = entry.SeasonNumber
-				progress.latestEpisode = entry.EpisodeNumber
-			}
 		}
 		if mediaType == "episode" && entry.SeasonNumber > 0 && entry.EpisodeNumber > 0 {
 			progress.watched[[2]int{entry.SeasonNumber, entry.EpisodeNumber}] = true
+			if entry.WatchedAt.After(progress.latestEpisodeAt) ||
+				(entry.WatchedAt.Equal(progress.latestEpisodeAt) &&
+					homeEpisodeIsAfterProgress(progress, entry.SeasonNumber, entry.EpisodeNumber)) {
+				progress.latestEpisodeAt = entry.WatchedAt
+				progress.latestSeason = entry.SeasonNumber
+				progress.latestEpisode = entry.EpisodeNumber
+			}
 		}
 	}
 
@@ -433,7 +437,9 @@ func (h *Handler) vortexoHomeNextEpisodeCandidate(
 				continue
 			}
 			key := [2]int{tmdbEpisode.SeasonNumber, tmdbEpisode.EpisodeNumber}
-			if progress.watched[key] || !homeEpisodeDateHasAired(tmdbEpisode.AirDate, now) {
+			if !homeEpisodeIsAfterProgress(progress, tmdbEpisode.SeasonNumber, tmdbEpisode.EpisodeNumber) ||
+				progress.watched[key] ||
+				!homeEpisodeDateHasAired(tmdbEpisode.AirDate, now) {
 				continue
 			}
 			episode := &models.Episode{
@@ -473,6 +479,9 @@ func firstUnwatchedHomeEpisode(
 		if episode == nil || episode.SeasonNumber <= 0 || episode.EpisodeNumber <= 0 {
 			continue
 		}
+		if !homeEpisodeIsAfterProgress(progress, episode.SeasonNumber, episode.EpisodeNumber) {
+			continue
+		}
 		if progress.watched[[2]int{episode.SeasonNumber, episode.EpisodeNumber}] {
 			continue
 		}
@@ -482,6 +491,19 @@ func firstUnwatchedHomeEpisode(
 		return episode
 	}
 	return nil
+}
+
+func homeEpisodeIsAfterProgress(progress *vortexoHomeShowProgress, season, episode int) bool {
+	if progress == nil || progress.latestSeason <= 0 || progress.latestEpisode <= 0 {
+		return true
+	}
+	if season < progress.latestSeason {
+		return false
+	}
+	if season == progress.latestSeason && episode <= progress.latestEpisode {
+		return false
+	}
+	return true
 }
 
 func vortexoHomeCandidateFromNextEpisode(
