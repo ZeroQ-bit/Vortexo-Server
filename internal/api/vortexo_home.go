@@ -413,8 +413,8 @@ func (h *Handler) buildVortexoHomeRows(
 		if len(items) > 0 {
 			rows = append(rows, vortexoHomeRow{
 				ID:           "trakt-watchlist",
-				Title:        "Trakt Watchlist",
-				Reason:       "Movies and series imported from your Trakt watchlist",
+				Title:        "Continue Watching",
+				Reason:       "Your local progress first, with Trakt watchlist items ready to start",
 				RefreshAfter: homeCtx.now.Add(time.Hour).UTC(),
 				Items:        items,
 			})
