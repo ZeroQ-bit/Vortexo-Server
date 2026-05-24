@@ -39,6 +39,10 @@ type vortexoHomeItem struct {
 	MediaType        string   `json:"media_type"`
 	TMDBID           int      `json:"tmdb_id,omitempty"`
 	IMDBID           string   `json:"imdb_id,omitempty"`
+	ShowTMDBID       int      `json:"show_tmdb_id,omitempty"`
+	ShowTitle        string   `json:"show_title,omitempty"`
+	SeasonNumber     int      `json:"season_number,omitempty"`
+	EpisodeNumber    int      `json:"episode_number,omitempty"`
 	Title            string   `json:"title"`
 	OriginalTitle    string   `json:"original_title,omitempty"`
 	Overview         string   `json:"overview,omitempty"`
@@ -57,6 +61,7 @@ type vortexoHomeItem struct {
 	FirstAirDate     string   `json:"first_air_date,omitempty"`
 	AddedAt          int64    `json:"added_at,omitempty"`
 	UpdatedAt        int64    `json:"updated_at,omitempty"`
+	LastViewedAt     int64    `json:"last_viewed_at,omitempty"`
 	NumberOfSeasons  int      `json:"number_of_seasons,omitempty"`
 	NumberOfEpisodes int      `json:"number_of_episodes,omitempty"`
 }
@@ -78,6 +83,7 @@ type vortexoHomeContext struct {
 	watched             map[string]bool
 	watchedTitles       map[string]bool
 	recentWatchName     string
+	upNextCandidates    []vortexoHomeCandidate
 	watchlistCandidates []vortexoHomeCandidate
 }
 
@@ -246,16 +252,323 @@ func (h *Handler) vortexoHomeContext(
 			}
 		}
 		if h.traktStore != nil {
-			if history, err := h.traktStore.GetExternalWatchHistory(ctx, userID, 200); err == nil {
+			if history, err := h.traktStore.GetExternalWatchHistory(ctx, userID, 20000); err == nil {
 				applyVortexoExternalWatchHistory(&homeCtx, history, candidates)
-			}
-			if watchlist, err := h.traktStore.GetExternalWatchlist(ctx, userID, 100); err == nil {
-				homeCtx.watchlistCandidates = vortexoHomeWatchlistCandidates(watchlist, candidates)
+				homeCtx.upNextCandidates = h.vortexoHomeUpNextCandidates(ctx, history, candidates, now, 40)
 			}
 		}
 	}
 
 	return homeCtx
+}
+
+type vortexoHomeShowProgress struct {
+	tmdbID        int
+	imdbID        string
+	title         string
+	year          int
+	latestAt      time.Time
+	latestSeason  int
+	latestEpisode int
+	watched       map[[2]int]bool
+}
+
+func (h *Handler) vortexoHomeUpNextCandidates(
+	ctx context.Context,
+	history []database.ExternalWatchHistory,
+	candidates []vortexoHomeCandidate,
+	now time.Time,
+	limit int,
+) []vortexoHomeCandidate {
+	if h.tmdbClient == nil || len(history) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+
+	progressByShow := make(map[int]*vortexoHomeShowProgress)
+	for _, entry := range history {
+		mediaType := strings.ToLower(strings.TrimSpace(entry.MediaType))
+		if mediaType != "tv" && mediaType != "show" && mediaType != "series" && mediaType != "episode" {
+			continue
+		}
+		if entry.TMDBID <= 0 {
+			continue
+		}
+
+		progress := progressByShow[entry.TMDBID]
+		if progress == nil {
+			progress = &vortexoHomeShowProgress{
+				tmdbID:  entry.TMDBID,
+				watched: map[[2]int]bool{},
+			}
+			progressByShow[entry.TMDBID] = progress
+		}
+		if strings.TrimSpace(progress.title) == "" && strings.TrimSpace(entry.Title) != "" {
+			progress.title = entry.Title
+		}
+		if progress.imdbID == "" {
+			progress.imdbID = entry.IMDBID
+		}
+		if progress.year == 0 {
+			progress.year = entry.Year
+		}
+		if entry.WatchedAt.After(progress.latestAt) {
+			progress.latestAt = entry.WatchedAt
+			if entry.SeasonNumber > 0 && entry.EpisodeNumber > 0 {
+				progress.latestSeason = entry.SeasonNumber
+				progress.latestEpisode = entry.EpisodeNumber
+			}
+		}
+		if mediaType == "episode" && entry.SeasonNumber > 0 && entry.EpisodeNumber > 0 {
+			progress.watched[[2]int{entry.SeasonNumber, entry.EpisodeNumber}] = true
+		}
+	}
+
+	progressItems := make([]*vortexoHomeShowProgress, 0, len(progressByShow))
+	for _, progress := range progressByShow {
+		if len(progress.watched) == 0 {
+			continue
+		}
+		progressItems = append(progressItems, progress)
+	}
+	sort.SliceStable(progressItems, func(i, j int) bool {
+		return progressItems[i].latestAt.After(progressItems[j].latestAt)
+	})
+
+	candidateByIdentity := make(map[string]vortexoHomeCandidate, len(candidates))
+	for _, candidate := range candidates {
+		candidateByIdentity[candidate.identity] = candidate
+	}
+
+	maxShowsToInspect := limit * 2
+	if maxShowsToInspect < 24 {
+		maxShowsToInspect = 24
+	}
+
+	result := make([]vortexoHomeCandidate, 0, limit)
+	seen := map[string]bool{}
+	for index, progress := range progressItems {
+		if len(result) >= limit {
+			break
+		}
+		if index >= maxShowsToInspect {
+			break
+		}
+
+		candidate, ok := h.vortexoHomeNextEpisodeCandidate(ctx, progress, candidateByIdentity, now)
+		if !ok || candidate.identity == "" || seen[candidate.identity] {
+			continue
+		}
+		seen[candidate.identity] = true
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func (h *Handler) vortexoHomeNextEpisodeCandidate(
+	ctx context.Context,
+	progress *vortexoHomeShowProgress,
+	candidateByIdentity map[string]vortexoHomeCandidate,
+	now time.Time,
+) (vortexoHomeCandidate, bool) {
+	if progress == nil || progress.tmdbID <= 0 {
+		return vortexoHomeCandidate{}, false
+	}
+
+	showIdentity := "tv:" + strconv.Itoa(progress.tmdbID)
+	baseCandidate := candidateByIdentity[showIdentity]
+
+	var localSeries *models.Series
+	if h.seriesStore != nil {
+		if series, err := h.seriesStore.GetByTMDBID(ctx, progress.tmdbID); err == nil && series != nil {
+			localSeries = series
+		}
+	}
+
+	if localSeries != nil && h.episodeStore != nil {
+		if episodes, err := h.episodeStore.ListBySeries(ctx, localSeries.ID); err == nil {
+			if episode := firstUnwatchedHomeEpisode(progress, episodes, now); episode != nil {
+				return vortexoHomeCandidateFromNextEpisode(progress, baseCandidate, localSeries, episode), true
+			}
+		}
+	}
+
+	tmdbSeries, err := h.tmdbClient.GetSeries(ctx, progress.tmdbID)
+	if err != nil || tmdbSeries == nil {
+		return vortexoHomeCandidate{}, false
+	}
+
+	seasonCount := tmdbSeries.Seasons
+	startSeason := progress.latestSeason
+	if startSeason <= 0 {
+		startSeason = 1
+	}
+	if seasonCount > 0 && startSeason > seasonCount {
+		startSeason = seasonCount
+	}
+
+	stopSeason := seasonCount
+	if stopSeason <= 0 {
+		stopSeason = startSeason + 2
+	}
+	if stopSeason > startSeason+3 {
+		stopSeason = startSeason + 3
+	}
+
+	for seasonNumber := startSeason; seasonNumber <= stopSeason; seasonNumber++ {
+		season, err := h.tmdbClient.GetSeason(ctx, progress.tmdbID, seasonNumber)
+		if err != nil || season == nil {
+			continue
+		}
+		sort.SliceStable(season.Episodes, func(i, j int) bool {
+			return season.Episodes[i].EpisodeNumber < season.Episodes[j].EpisodeNumber
+		})
+		for _, tmdbEpisode := range season.Episodes {
+			if tmdbEpisode.SeasonNumber <= 0 {
+				tmdbEpisode.SeasonNumber = seasonNumber
+			}
+			if tmdbEpisode.EpisodeNumber <= 0 {
+				continue
+			}
+			key := [2]int{tmdbEpisode.SeasonNumber, tmdbEpisode.EpisodeNumber}
+			if progress.watched[key] || !homeEpisodeDateHasAired(tmdbEpisode.AirDate, now) {
+				continue
+			}
+			episode := &models.Episode{
+				TMDBID:        tmdbEpisode.ID,
+				SeriesID:      tmdbSeries.ID,
+				SeasonNumber:  tmdbEpisode.SeasonNumber,
+				EpisodeNumber: tmdbEpisode.EpisodeNumber,
+				Title:         firstNonEmpty(tmdbEpisode.Name, homeEpisodeFallbackTitle(tmdbEpisode.SeasonNumber, tmdbEpisode.EpisodeNumber)),
+				Overview:      tmdbEpisode.Overview,
+				AirDate:       homeParseDate(tmdbEpisode.AirDate),
+				StillPath:     tmdbEpisode.StillPath,
+				Runtime:       tmdbEpisode.Runtime,
+			}
+			return vortexoHomeCandidateFromNextEpisode(progress, baseCandidate, tmdbSeries, episode), true
+		}
+	}
+
+	return vortexoHomeCandidate{}, false
+}
+
+func firstUnwatchedHomeEpisode(
+	progress *vortexoHomeShowProgress,
+	episodes []*models.Episode,
+	now time.Time,
+) *models.Episode {
+	if progress == nil || len(episodes) == 0 {
+		return nil
+	}
+	sortedEpisodes := append([]*models.Episode(nil), episodes...)
+	sort.SliceStable(sortedEpisodes, func(i, j int) bool {
+		if sortedEpisodes[i].SeasonNumber != sortedEpisodes[j].SeasonNumber {
+			return sortedEpisodes[i].SeasonNumber < sortedEpisodes[j].SeasonNumber
+		}
+		return sortedEpisodes[i].EpisodeNumber < sortedEpisodes[j].EpisodeNumber
+	})
+	for _, episode := range sortedEpisodes {
+		if episode == nil || episode.SeasonNumber <= 0 || episode.EpisodeNumber <= 0 {
+			continue
+		}
+		if progress.watched[[2]int{episode.SeasonNumber, episode.EpisodeNumber}] {
+			continue
+		}
+		if !homeEpisodeTimeHasAired(episode.AirDate, now) {
+			continue
+		}
+		return episode
+	}
+	return nil
+}
+
+func vortexoHomeCandidateFromNextEpisode(
+	progress *vortexoHomeShowProgress,
+	baseCandidate vortexoHomeCandidate,
+	series *models.Series,
+	episode *models.Episode,
+) vortexoHomeCandidate {
+	showTitle := firstNonEmpty(series.Title, baseCandidate.item.Title, progress.title)
+	episodeTitle := firstNonEmpty(episode.Title, homeEpisodeFallbackTitle(episode.SeasonNumber, episode.EpisodeNumber))
+	firstAirDate := homeDateString(episode.AirDate)
+	posterPath := firstNonEmpty(series.PosterPath, baseCandidate.item.PosterPath)
+	backdropPath := firstNonEmpty(series.BackdropPath, baseCandidate.item.BackdropPath)
+	landscapePath := firstNonEmpty(
+		episode.StillPath,
+		firstString(metadataStringArray(series.Metadata, "landscape_paths")),
+		baseCandidate.item.LandscapePath,
+		backdropPath,
+	)
+	logoPath := firstNonEmpty(
+		firstString(metadataStringArray(series.Metadata, "logo_paths")),
+		metadataString(series.Metadata, "logo_path"),
+		baseCandidate.item.LogoPath,
+	)
+	imdbID := firstNonEmpty(series.IMDBID, progress.imdbID, baseCandidate.item.IMDBID)
+	updatedAt := progress.latestAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+
+	episodeID := strconv.FormatInt(episode.ID, 10)
+	if episode.TMDBID > 0 {
+		episodeID = strconv.Itoa(episode.TMDBID)
+	}
+	if episodeID == "0" {
+		episodeID = strconv.Itoa(episode.SeasonNumber) + "-" + strconv.Itoa(episode.EpisodeNumber)
+	}
+
+	item := vortexoHomeItem{
+		ID:               "episode:" + strconv.Itoa(progress.tmdbID) + ":" + strconv.Itoa(episode.SeasonNumber) + ":" + strconv.Itoa(episode.EpisodeNumber),
+		RatingKey:        "vortexo:tmdb:episode:" + strconv.Itoa(progress.tmdbID) + ":" + strconv.Itoa(episode.SeasonNumber) + ":" + strconv.Itoa(episode.EpisodeNumber) + ":" + episodeID,
+		Key:              "tmdb://tv/" + strconv.Itoa(progress.tmdbID) + "/season/" + strconv.Itoa(episode.SeasonNumber) + "/episode/" + strconv.Itoa(episode.EpisodeNumber),
+		GUID:             "tmdb://tv/" + strconv.Itoa(progress.tmdbID) + "/season/" + strconv.Itoa(episode.SeasonNumber) + "/episode/" + strconv.Itoa(episode.EpisodeNumber),
+		MediaType:        "episode",
+		TMDBID:           progress.tmdbID,
+		IMDBID:           imdbID,
+		ShowTMDBID:       progress.tmdbID,
+		ShowTitle:        showTitle,
+		SeasonNumber:     episode.SeasonNumber,
+		EpisodeNumber:    episode.EpisodeNumber,
+		Title:            episodeTitle,
+		Overview:         firstNonEmpty(episode.Overview, series.Overview, baseCandidate.item.Overview),
+		PosterPath:       posterPath,
+		BackdropPath:     backdropPath,
+		LandscapePath:    landscapePath,
+		LogoPath:         logoPath,
+		OriginalLanguage: firstNonEmpty(series.OriginalLang, baseCandidate.item.OriginalLanguage),
+		Keywords:         firstNonEmptyStringSlice(homeMetadataKeywords(series.Metadata), baseCandidate.item.Keywords),
+		Year:             yearFromHomeDate(firstNonEmpty(firstAirDate, homeDateString(series.FirstAirDate))),
+		Runtime:          episode.Runtime,
+		Genres:           firstNonEmptyStringSlice(series.Genres, baseCandidate.item.Genres),
+		VoteAverage:      firstNonZeroFloat(series.VoteAverage, baseCandidate.item.VoteAverage),
+		VoteCount:        firstNonZeroInt(series.VoteCount, baseCandidate.item.VoteCount),
+		FirstAirDate:     firstAirDate,
+		AddedAt:          updatedAt.Unix(),
+		UpdatedAt:        updatedAt.Unix(),
+		LastViewedAt:     updatedAt.Unix(),
+		NumberOfSeasons:  series.Seasons,
+		NumberOfEpisodes: series.TotalEpisodes,
+	}
+	if item.Year == 0 {
+		item.Year = series.Year
+	}
+	if item.Runtime == 0 {
+		item.Runtime = baseCandidate.item.Runtime
+	}
+
+	candidate := vortexoHomeCandidate{
+		item:       item,
+		identity:   "tv:" + strconv.Itoa(progress.tmdbID),
+		source:     "trakt-up-next",
+		isLibrary:  baseCandidate.isLibrary,
+		addedAt:    updatedAt,
+		updatedAt:  updatedAt,
+		scoreBoost: 12,
+	}
+	return candidate
 }
 
 func (h *Handler) vortexoHomeUserID(ctx context.Context, r *http.Request) (int, bool) {
@@ -408,13 +721,13 @@ func (h *Handler) buildVortexoHomeRows(
 	used := make(map[string]bool, len(candidates))
 	rows := make([]vortexoHomeRow, 0, rowLimit)
 
-	if len(homeCtx.watchlistCandidates) > 0 && len(rows) < rowLimit {
-		items := buildVortexoHomePinnedItems(homeCtx.watchlistCandidates, used, itemLimit)
+	if len(homeCtx.upNextCandidates) > 0 && len(rows) < rowLimit {
+		items := buildVortexoHomePinnedItems(homeCtx.upNextCandidates, used, itemLimit)
 		if len(items) > 0 {
 			rows = append(rows, vortexoHomeRow{
-				ID:           "trakt-watchlist",
+				ID:           "trakt-up-next",
 				Title:        "Continue Watching",
-				Reason:       "Your local progress first, with Trakt watchlist items ready to start",
+				Reason:       "Trakt Up Next episodes sorted by recent activity",
 				RefreshAfter: homeCtx.now.Add(time.Hour).UTC(),
 				Items:        items,
 			})
@@ -1200,6 +1513,74 @@ func unixIfSet(value time.Time) int64 {
 		return 0
 	}
 	return value.Unix()
+}
+
+func homeEpisodeFallbackTitle(season, episode int) string {
+	if season <= 0 || episode <= 0 {
+		return "Episode"
+	}
+	return "S" + twoDigitHomeNumber(season) + "E" + twoDigitHomeNumber(episode)
+}
+
+func twoDigitHomeNumber(value int) string {
+	if value >= 0 && value < 10 {
+		return "0" + strconv.Itoa(value)
+	}
+	return strconv.Itoa(value)
+}
+
+func homeEpisodeDateHasAired(value string, now time.Time) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	parsed := homeParseDate(value)
+	return homeEpisodeTimeHasAired(parsed, now)
+}
+
+func homeEpisodeTimeHasAired(value *time.Time, now time.Time) bool {
+	if value == nil || value.IsZero() {
+		return false
+	}
+	return !value.After(now)
+}
+
+func homeParseDate(value string) *time.Time {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := time.Parse("2006-01-02", trimmed)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func firstNonEmptyStringSlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstNonZeroFloat(values ...float64) float64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func yearFromHomeDate(value string) int {
