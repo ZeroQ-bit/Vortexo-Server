@@ -618,6 +618,7 @@ func filterSeriesStreamsByEpisode(streams []TorrentioStream, season, episode int
 		streamSeason, streamEpisode, ok := parseStreamEpisodeNumber(stream)
 		if !ok {
 			unparseable++
+			filtered = append(filtered, stream)
 			continue
 		}
 		if streamSeason == season && streamEpisode == episode {
@@ -628,7 +629,7 @@ func filterSeriesStreamsByEpisode(streams []TorrentioStream, season, episode int
 	}
 
 	if len(filtered) != len(streams) {
-		log.Printf("[EPISODE-FILTER] Filtered %d -> %d streams for S%02dE%02d (removed %d mismatched, %d unparseable)",
+		log.Printf("[EPISODE-FILTER] Filtered %d -> %d streams for S%02dE%02d (removed %d mismatched, kept %d unparseable)",
 			len(streams), len(filtered), season, episode, mismatched, unparseable)
 	}
 

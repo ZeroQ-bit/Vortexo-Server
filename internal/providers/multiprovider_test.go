@@ -193,7 +193,7 @@ func TestGetBestStreamAppliesMaxResolution(t *testing.T) {
 	}
 }
 
-func TestFilterSeriesStreamsByEpisodeKeepsExactEpisodeOnly(t *testing.T) {
+func TestFilterSeriesStreamsByEpisodeKeepsExactEpisodeAndUnparseableStreams(t *testing.T) {
 	streams := []TorrentioStream{
 		{Title: "Historys.Greatest.Mysteries.S07E03.1080p.WEB.h264-EDITH"},
 		{Title: "Historys.Greatest.Mysteries.S07E13.1080p.WEB.h264-EDITH"},
@@ -204,12 +204,18 @@ func TestFilterSeriesStreamsByEpisodeKeepsExactEpisodeOnly(t *testing.T) {
 	}
 
 	got := filterSeriesStreamsByEpisode(streams, 7, 3)
-	if len(got) != 3 {
-		t.Fatalf("expected 3 exact episode streams, got %d: %#v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("expected 3 exact episode streams plus 1 unparseable provider result, got %d: %#v", len(got), got)
 	}
 	for _, stream := range got {
 		season, episode, ok := parseStreamEpisodeNumber(stream)
-		if !ok || season != 7 || episode != 3 {
+		if !ok {
+			if stream.Title != "Historys Greatest Mysteries Season 7 Pack 1080p" {
+				t.Fatalf("unexpected unparseable stream kept: %#v", stream)
+			}
+			continue
+		}
+		if season != 7 || episode != 3 {
 			t.Fatalf("expected exact S07E03 stream, got season=%d episode=%d ok=%v stream=%#v", season, episode, ok, stream)
 		}
 	}
@@ -231,5 +237,22 @@ func TestGetSeriesStreamsFiltersProviderSeasonResults(t *testing.T) {
 	}
 	if len(streams) != 1 || streams[0].Title != "Show.S01E01.1080p.WEB-DL" {
 		t.Fatalf("expected only S01E01 stream, got %#v", streams)
+	}
+}
+
+func TestGetSeriesStreamsKeepsUnparseableAddonResults(t *testing.T) {
+	mp := &MultiProvider{
+		Providers: []StreamProvider{fakeStreamProvider{seriesStreams: []TorrentioStream{
+			{Title: "1080p - SDR - Torrentio", Name: "RD+ Torrentio", Quality: "1080p"},
+		}}},
+		ProviderNames: []string{"fake"},
+	}
+
+	streams, err := mp.GetSeriesStreams("tt123", 1, 1)
+	if err != nil {
+		t.Fatalf("expected unparseable addon result to remain available, got error: %v", err)
+	}
+	if len(streams) != 1 || streams[0].Title != "1080p - SDR - Torrentio" {
+		t.Fatalf("expected unparseable provider stream to be preserved, got %#v", streams)
 	}
 }
