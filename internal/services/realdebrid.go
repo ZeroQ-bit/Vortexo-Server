@@ -326,12 +326,17 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		availability, availabilityErr := c.CheckInstantAvailability(availabilityCtx, []string{infoHash})
 		cancelAvailability()
 		if availabilityErr != nil {
-			return "", fmt.Errorf("failed to verify Real-Debrid cache before adding magnet: %w", availabilityErr)
+			if isRealDebridDisabledEndpointError(availabilityErr) {
+				fmt.Printf("[RD-DEBUG] Instant availability endpoint disabled; adding magnet without precheck for hash %s\n", truncateString(infoHash, 12))
+			} else {
+				return "", fmt.Errorf("failed to verify Real-Debrid cache before adding magnet: %w", availabilityErr)
+			}
+		} else {
+			if !availability[infoHash] {
+				return "", fmt.Errorf("torrent not cached on RD")
+			}
+			verifiedInstantlyAvailable = true
 		}
-		if !availability[infoHash] {
-			return "", fmt.Errorf("torrent not cached on RD")
-		}
-		verifiedInstantlyAvailable = true
 
 		// Build magnet link
 		magnetLink := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
@@ -789,6 +794,10 @@ func (c *RealDebridClient) makeRequest(ctx context.Context, method, endpoint str
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("max retries exceeded")
+}
+
+func isRealDebridDisabledEndpointError(err error) bool {
+	return errors.Is(err, ErrRealDebridDisabledEndpoint)
 }
 
 // TestConnection tests the Real-Debrid API connection

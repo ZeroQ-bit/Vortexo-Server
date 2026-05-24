@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -14,6 +15,18 @@ func TestRealDebridAPIErrorDisabledEndpoint(t *testing.T) {
 
 	if !errors.Is(err, ErrRealDebridDisabledEndpoint) {
 		t.Fatal("expected disabled endpoint sentinel to match")
+	}
+}
+
+func TestRealDebridDisabledEndpointWrapped(t *testing.T) {
+	err := fmt.Errorf("failed to check availability: %w", &RealDebridAPIError{
+		StatusCode: 403,
+		ErrorName:  "disabled_endpoint",
+		ErrorCode:  37,
+	})
+
+	if !isRealDebridDisabledEndpointError(err) {
+		t.Fatal("expected wrapped disabled endpoint error to match")
 	}
 }
 
