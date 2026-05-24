@@ -102,6 +102,15 @@ type TraktWatchedShow struct {
 	Seasons       []TraktWatchedSeason `json:"seasons"`
 }
 
+type TraktWatchlistItem struct {
+	ID       int        `json:"id"`
+	Rank     int        `json:"rank"`
+	Type     string     `json:"type"`
+	ListedAt *time.Time `json:"listed_at"`
+	Movie    TraktMovie `json:"movie"`
+	Show     TraktShow  `json:"show"`
+}
+
 func NewTraktClient(clientID, clientSecret string) *TraktClient {
 	return &TraktClient{
 		clientID:     strings.TrimSpace(clientID),
@@ -167,6 +176,18 @@ func (c *TraktClient) GetWatchedMovies(ctx context.Context, accessToken string) 
 func (c *TraktClient) GetWatchedShows(ctx context.Context, accessToken string) ([]TraktWatchedShow, error) {
 	var result []TraktWatchedShow
 	err := c.doJSON(ctx, http.MethodGet, "/sync/watched/shows", accessToken, nil, &result)
+	return result, err
+}
+
+func (c *TraktClient) GetWatchlistMovies(ctx context.Context, accessToken string) ([]TraktWatchlistItem, error) {
+	var result []TraktWatchlistItem
+	err := c.doJSON(ctx, http.MethodGet, "/sync/watchlist/movies/added", accessToken, nil, &result)
+	return result, err
+}
+
+func (c *TraktClient) GetWatchlistShows(ctx context.Context, accessToken string) ([]TraktWatchlistItem, error) {
+	var result []TraktWatchlistItem
+	err := c.doJSON(ctx, http.MethodGet, "/sync/watchlist/shows/added", accessToken, nil, &result)
 	return result, err
 }
 

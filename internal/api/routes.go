@@ -198,6 +198,7 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	api.HandleFunc("/trakt/device/code", handler.TraktDeviceCode).Methods("POST")
 	api.HandleFunc("/trakt/device/token", handler.TraktDeviceToken).Methods("POST")
 	api.HandleFunc("/trakt/sync/watched", handler.TraktSyncWatched).Methods("POST")
+	api.HandleFunc("/trakt/sync/watchlist", handler.TraktSyncWatchlist).Methods("POST")
 	api.HandleFunc("/trakt/disconnect", handler.TraktDisconnect).Methods("DELETE")
 
 	// Vortexo/private client source bridge

@@ -209,7 +209,7 @@ interface TraktDeviceAuth {
 interface TraktSyncResult {
   imported_movies: number;
   imported_shows: number;
-  imported_episodes: number;
+  imported_episodes?: number;
   skipped: number;
   synced_at: string;
 }
@@ -671,9 +671,12 @@ export default function Settings() {
     setTraktBusy("device");
     setMessage("");
     try {
-      await api.put("/settings", buildSettingsPayload(settings));
-      const response = await api.post<TraktDeviceAuth>("/trakt/device/code");
+      const response = await api.post<TraktDeviceAuth>("/trakt/device/code", {
+        client_id: settings.trakt_client_id,
+        client_secret: settings.trakt_client_secret,
+      });
       setTraktDeviceAuth(response.data);
+      void fetchTraktStatus();
       setMessage("Open Trakt and enter the code shown below.");
     } catch (error: any) {
       setMessage(
@@ -719,11 +722,32 @@ export default function Settings() {
       });
       await fetchTraktStatus();
       setMessage(
-        `✅ Imported ${response.data.imported_movies} movies, ${response.data.imported_shows} shows, and ${response.data.imported_episodes} episodes from Trakt`,
+        `✅ Imported ${response.data.imported_movies} movies, ${response.data.imported_shows} shows, and ${response.data.imported_episodes ?? 0} episodes from Trakt`,
       );
     } catch (error: any) {
       setMessage(
         `❌ Trakt sync failed: ${error.response?.data?.error || error.message}`,
+      );
+    } finally {
+      setTraktBusy(null);
+    }
+  };
+
+  const syncTraktWatchlist = async () => {
+    setTraktBusy("sync");
+    setMessage("");
+    try {
+      const response = await api.post<TraktSyncResult>("/trakt/sync/watchlist", {
+        import_movies: true,
+        import_shows: true,
+      });
+      await fetchTraktStatus();
+      setMessage(
+        `✅ Imported ${response.data.imported_movies} watchlist movies and ${response.data.imported_shows} watchlist shows from Trakt`,
+      );
+    } catch (error: any) {
+      setMessage(
+        `❌ Trakt watchlist import failed: ${error.response?.data?.error || error.message}`,
       );
     } finally {
       setTraktBusy(null);
@@ -2252,6 +2276,20 @@ export default function Settings() {
                           <RefreshCw className="h-4 w-4" />
                         )}
                         Import Watched
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={syncTraktWatchlist}
+                        disabled={!traktStatus?.connected || traktBusy !== null}
+                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        {traktBusy === "sync" ? (
+                          <Loader className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                        Import Watchlist
                       </button>
 
                       {traktStatus?.connected && (

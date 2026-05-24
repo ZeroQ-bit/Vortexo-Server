@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"hash/fnv"
 	"net/http"
 	"sort"
@@ -71,12 +72,13 @@ type vortexoHomeCandidate struct {
 }
 
 type vortexoHomeContext struct {
-	now             time.Time
-	userID          int
-	genreWeights    map[string]int
-	watched         map[string]bool
-	watchedTitles   map[string]bool
-	recentWatchName string
+	now                 time.Time
+	userID              int
+	genreWeights        map[string]int
+	watched             map[string]bool
+	watchedTitles       map[string]bool
+	recentWatchName     string
+	watchlistCandidates []vortexoHomeCandidate
 }
 
 type vortexoHomeRecipe struct {
@@ -236,7 +238,7 @@ func (h *Handler) vortexoHomeContext(
 		watchedTitles: map[string]bool{},
 	}
 
-	if userID, ok := optionalVortexoUserID(r); ok {
+	if userID, ok := h.vortexoHomeUserID(ctx, r); ok {
 		homeCtx.userID = userID
 		if h.userStore != nil {
 			if history, err := h.userStore.GetWatchHistory(userID, 80); err == nil {
@@ -247,10 +249,23 @@ func (h *Handler) vortexoHomeContext(
 			if history, err := h.traktStore.GetExternalWatchHistory(ctx, userID, 200); err == nil {
 				applyVortexoExternalWatchHistory(&homeCtx, history, candidates)
 			}
+			if watchlist, err := h.traktStore.GetExternalWatchlist(ctx, userID, 100); err == nil {
+				homeCtx.watchlistCandidates = vortexoHomeWatchlistCandidates(watchlist, candidates)
+			}
 		}
 	}
 
 	return homeCtx
+}
+
+func (h *Handler) vortexoHomeUserID(ctx context.Context, r *http.Request) (int, bool) {
+	if userID, ok := optionalVortexoUserID(r); ok {
+		return userID, true
+	}
+	if h.traktStore == nil {
+		return 0, false
+	}
+	return h.traktStore.FallbackHomeUserID(ctx)
 }
 
 func applyVortexoWatchHistory(
@@ -332,6 +347,53 @@ func applyVortexoExternalWatchHistory(
 	}
 }
 
+func vortexoHomeWatchlistCandidates(
+	watchlist []database.ExternalWatchlistItem,
+	candidates []vortexoHomeCandidate,
+) []vortexoHomeCandidate {
+	byIdentity := make(map[string]vortexoHomeCandidate, len(candidates))
+	byTitle := make(map[string]vortexoHomeCandidate, len(candidates))
+	for _, candidate := range candidates {
+		byIdentity[candidate.identity] = candidate
+		byTitle[normalizeHomeText(candidate.item.Title)] = candidate
+	}
+
+	result := make([]vortexoHomeCandidate, 0, len(watchlist))
+	seen := map[string]bool{}
+	for _, entry := range watchlist {
+		mediaType := strings.ToLower(strings.TrimSpace(entry.MediaType))
+		if mediaType == "show" || mediaType == "series" {
+			mediaType = "tv"
+		}
+		if mediaType != "tv" {
+			mediaType = "movie"
+		}
+
+		identity := ""
+		if entry.TMDBID > 0 {
+			identity = mediaType + ":" + strconv.Itoa(entry.TMDBID)
+		}
+
+		var candidate vortexoHomeCandidate
+		var ok bool
+		if identity != "" {
+			candidate, ok = byIdentity[identity]
+		}
+		if !ok {
+			candidate, ok = byTitle[normalizeHomeText(entry.Title)]
+		}
+		if !ok {
+			candidate = vortexoHomeCandidateFromWatchlist(entry, mediaType)
+		}
+		if candidate.identity == "" || seen[candidate.identity] {
+			continue
+		}
+		seen[candidate.identity] = true
+		result = append(result, candidate)
+	}
+	return result
+}
+
 func (h *Handler) buildVortexoHomeRows(
 	candidates []vortexoHomeCandidate,
 	homeCtx vortexoHomeContext,
@@ -345,6 +407,19 @@ func (h *Handler) buildVortexoHomeRows(
 	recipes := selectVortexoHomeRecipes(homeCtx)
 	used := make(map[string]bool, len(candidates))
 	rows := make([]vortexoHomeRow, 0, rowLimit)
+
+	if len(homeCtx.watchlistCandidates) > 0 && len(rows) < rowLimit {
+		items := buildVortexoHomePinnedItems(homeCtx.watchlistCandidates, used, itemLimit)
+		if len(items) > 0 {
+			rows = append(rows, vortexoHomeRow{
+				ID:           "trakt-watchlist",
+				Title:        "Trakt Watchlist",
+				Reason:       "Movies and series imported from your Trakt watchlist",
+				RefreshAfter: homeCtx.now.Add(time.Hour).UTC(),
+				Items:        items,
+			})
+		}
+	}
 
 	for _, recipe := range recipes {
 		if len(rows) >= rowLimit {
@@ -378,6 +453,25 @@ func (h *Handler) buildVortexoHomeRows(
 	}
 
 	return rows
+}
+
+func buildVortexoHomePinnedItems(
+	candidates []vortexoHomeCandidate,
+	used map[string]bool,
+	limit int,
+) []vortexoHomeItem {
+	items := make([]vortexoHomeItem, 0, limit)
+	for _, candidate := range candidates {
+		if len(items) >= limit {
+			break
+		}
+		if candidate.identity == "" || used[candidate.identity] {
+			continue
+		}
+		used[candidate.identity] = true
+		items = append(items, candidate.item)
+	}
+	return items
 }
 
 func buildVortexoHomeRowItems(
@@ -788,6 +882,60 @@ func vortexoHomeCandidateFromTrending(item services.TrendingItem, source string)
 	return candidate
 }
 
+func vortexoHomeCandidateFromWatchlist(entry database.ExternalWatchlistItem, mediaType string) vortexoHomeCandidate {
+	metadata := entry.Metadata
+	if metadata == nil {
+		metadata = models.Metadata{}
+	}
+	logoPath := firstString(metadataStringArray(metadata, "logo_paths"))
+	if logoPath == "" {
+		logoPath = metadataString(metadata, "logo_path")
+	}
+	landscapePath := firstString(metadataStringArray(metadata, "landscape_paths"))
+	releaseDate := metadataString(metadata, "release_date")
+	firstAirDate := metadataString(metadata, "first_air_date")
+
+	item := vortexoHomeItem{
+		ID:               mediaType + ":" + strconv.Itoa(entry.TMDBID),
+		MediaType:        mediaType,
+		TMDBID:           entry.TMDBID,
+		IMDBID:           firstNonEmpty(metadataString(metadata, "imdb_id"), entry.IMDBID),
+		Title:            firstNonEmpty(metadataString(metadata, "title"), entry.Title),
+		OriginalTitle:    metadataString(metadata, "original_title"),
+		Overview:         metadataString(metadata, "overview"),
+		PosterPath:       metadataString(metadata, "poster_path"),
+		BackdropPath:     metadataString(metadata, "backdrop_path"),
+		LandscapePath:    landscapePath,
+		LogoPath:         logoPath,
+		OriginalLanguage: metadataString(metadata, "original_language"),
+		Keywords:         homeMetadataKeywords(metadata),
+		Year:             entry.Year,
+		Runtime:          homeMetadataInt(metadata, "runtime"),
+		Genres:           metadataStringArray(metadata, "genres"),
+		VoteAverage:      homeMetadataFloat(metadata, "vote_average"),
+		VoteCount:        homeMetadataInt(metadata, "vote_count"),
+		ReleaseDate:      releaseDate,
+		FirstAirDate:     firstAirDate,
+		AddedAt:          entry.ListedAt.Unix(),
+		UpdatedAt:        entry.ListedAt.Unix(),
+		NumberOfSeasons:  homeMetadataInt(metadata, "number_of_seasons"),
+		NumberOfEpisodes: homeMetadataInt(metadata, "total_episodes"),
+	}
+	if item.Year == 0 {
+		item.Year = yearFromHomeDate(firstNonEmpty(item.ReleaseDate, item.FirstAirDate))
+	}
+	candidate := vortexoHomeCandidate{
+		item:       item,
+		source:     "trakt-watchlist",
+		isLibrary:  false,
+		addedAt:    entry.ListedAt,
+		updatedAt:  entry.ListedAt,
+		scoreBoost: 8,
+	}
+	candidate.identity = vortexoHomeIdentity(item)
+	return candidate
+}
+
 func deduplicateVortexoHomeCandidates(candidates []vortexoHomeCandidate) []vortexoHomeCandidate {
 	byID := make(map[string]vortexoHomeCandidate, len(candidates))
 	order := make([]string, 0, len(candidates))
@@ -974,6 +1122,52 @@ func metadataStringArray(metadata models.Metadata, key string) []string {
 		return result
 	default:
 		return nil
+	}
+}
+
+func homeMetadataInt(metadata models.Metadata, key string) int {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		result, _ := value.Int64()
+		return int(result)
+	case string:
+		result, _ := strconv.Atoi(strings.TrimSpace(value))
+		return result
+	default:
+		return 0
+	}
+}
+
+func homeMetadataFloat(metadata models.Metadata, key string) float64 {
+	if metadata == nil {
+		return 0
+	}
+	switch value := metadata[key].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		result, _ := value.Float64()
+		return result
+	case string:
+		result, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return result
+	default:
+		return 0
 	}
 }
 
