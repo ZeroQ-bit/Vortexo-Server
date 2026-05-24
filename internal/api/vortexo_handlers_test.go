@@ -115,6 +115,54 @@ func TestBuildVortexoSourcesPrefersDirectURLWhenHashPresent(t *testing.T) {
 	}
 }
 
+func TestBuildVortexoSourcesResolvesTorrentioURLThroughRealDebrid(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	const resolverURL = "https://torrentio.strem.fun/resolve/realdebrid/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/" + hash + "/null/1/Memory.of.a.Killer.S01E03.720p.HEVC.x265-MeGusta.mkv"
+	handler := &Handler{}
+
+	sources := handler.buildVortexoSources([]providers.TorrentioStream{{
+		Name:   "RD+",
+		Title:  "Memory.of.a.Killer.S01E03.720p.HEVC.x265-MeGusta.mkv",
+		URL:    resolverURL,
+		Cached: true,
+		Source: "Torrentio",
+	}}, vortexoSourcesRequest{Type: "episode", Title: "Memory of a Killer", Year: 2026, Season: 1, Episode: 3})
+
+	if len(sources) != 1 {
+		t.Fatalf("buildVortexoSources returned %d sources, want 1", len(sources))
+	}
+
+	token, err := decodeVortexoPlayToken(sources[0].ID)
+	if err != nil {
+		t.Fatalf("decodeVortexoPlayToken failed: %v", err)
+	}
+	if token.Hash != hash {
+		t.Fatalf("token.Hash = %q, want %q", token.Hash, hash)
+	}
+	if token.URL != "" {
+		t.Fatalf("token.URL = %q, want empty so /vortexo/play resolves RD download URL", token.URL)
+	}
+	if sources[0].DirectURL != "" || sources[0].DownloadURL != "" {
+		t.Fatalf("source direct URLs = %q/%q, want empty resolver fields", sources[0].DirectURL, sources[0].DownloadURL)
+	}
+}
+
+func TestDirectVortexoPlaybackURLKeepsRealDebridDownloadURL(t *testing.T) {
+	const directURL = "https://syd5-4.download.real-debrid.com/d/QZBMYCQLC2DZG107/Memory.of.a.Killer.S01E03.720p.HEVC.x265-MeGusta%5BEZTVx.to%5D.mkv"
+
+	if got := directVortexoPlaybackURL(directURL); got != directURL {
+		t.Fatalf("directVortexoPlaybackURL = %q, want %q", got, directURL)
+	}
+}
+
+func TestDirectVortexoPlaybackURLRejectsRealDebridStreamingPage(t *testing.T) {
+	const streamingURL = "https://real-debrid.com/streaming-QZBMYCQLC2DZG"
+
+	if got := directVortexoPlaybackURL(streamingURL); got != "" {
+		t.Fatalf("directVortexoPlaybackURL = %q, want empty for streaming page", got)
+	}
+}
+
 func TestFilterVortexoMovieStreamsRejectsAdultAndLooseTitleMatches(t *testing.T) {
 	streams := []providers.TorrentioStream{
 		{Title: "Normal 2025 2160p AMZN WEB-DL DD+ 5.1 H.265-SCOPE", Name: "Normal 2025", Source: "DMM"},

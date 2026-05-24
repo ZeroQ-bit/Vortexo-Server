@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -1107,10 +1108,35 @@ func directVortexoPlaybackURL(rawURL string) string {
 	rawURL = strings.TrimSpace(rawURL)
 	lowerURL := strings.ToLower(rawURL)
 	if strings.HasPrefix(lowerURL, "http://") || strings.HasPrefix(lowerURL, "https://") {
+		if isVortexoResolverURL(rawURL) {
+			return ""
+		}
 		return rawURL
 	}
 
 	return ""
+}
+
+func isVortexoResolverURL(rawURL string) bool {
+	lowerURL := strings.ToLower(strings.TrimSpace(rawURL))
+	if lowerURL == "" {
+		return false
+	}
+	if strings.Contains(lowerURL, "/resolve/realdebrid/") {
+		return true
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.ToLower(parsed.EscapedPath())
+	if host == "real-debrid.com" && strings.HasPrefix(path, "/streaming-") {
+		return true
+	}
+
+	return false
 }
 
 func wantsVortexoPlayJSON(r *http.Request) bool {
