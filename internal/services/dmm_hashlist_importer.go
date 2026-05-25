@@ -970,6 +970,9 @@ func (i *DMMHashlistImporter) cacheMovieCandidateStream(ctx context.Context, mov
 	if err != nil {
 		return false, err
 	}
+	if err := i.streamCacheStore.UpsertStreamOption(ctx, dmmCandidateStreamOption(candidate, int(movieID), 0)); err != nil {
+		return false, err
+	}
 	rows, _ := result.RowsAffected()
 	if rows > 0 {
 		_, _ = i.movieStore.GetDB().ExecContext(ctx, `UPDATE library_movies SET available = true WHERE id = $1`, movieID)
@@ -1049,8 +1052,58 @@ func (i *DMMHashlistImporter) cacheSeriesCandidateStream(ctx context.Context, se
 	if err != nil {
 		return false, err
 	}
+	if err := i.streamCacheStore.UpsertStreamOption(ctx, dmmCandidateStreamOption(candidate, 0, int(seriesID))); err != nil {
+		return false, err
+	}
 	rows, _ := result.RowsAffected()
 	return rows > 0, nil
+}
+
+func dmmCandidateStreamOption(candidate dmmCandidate, movieID, seriesID int) *models.CachedStream {
+	streamURL := magnetURL(candidate.Torrent.Hash)
+	title := strings.TrimSpace(candidate.Torrent.Filename)
+	if title == "" {
+		title = strings.TrimSpace(candidate.Title)
+	}
+	if title == "" {
+		title = streamURL
+	}
+
+	sizeGB := candidate.Stream.SizeGB
+	if sizeGB <= 0 && candidate.Torrent.Bytes > 0 {
+		sizeGB = float64(candidate.Torrent.Bytes) / (1024 * 1024 * 1024)
+	}
+
+	return &models.CachedStream{
+		MediaType:      candidate.MediaType,
+		MediaID:        firstPositiveInt(movieID, seriesID),
+		MovieID:        movieID,
+		SeriesID:       seriesID,
+		Season:         candidate.Season,
+		Episode:        candidate.Episode,
+		StreamTitle:    title,
+		StreamURL:      streamURL,
+		StreamHash:     normalizeDMMHash(candidate.Torrent.Hash),
+		QualityScore:   candidate.Stream.QualityScore,
+		Resolution:     candidate.Stream.Resolution,
+		HDRType:        candidate.Stream.HDRType,
+		AudioFormat:    candidate.Stream.AudioFormat,
+		SourceType:     candidate.Stream.Source,
+		FileSizeGB:     sizeGB,
+		Codec:          candidate.Stream.Codec,
+		Indexer:        dmmHashlistIndexer,
+		IsAvailable:    true,
+		RDLibraryAdded: false,
+	}
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func (i *DMMHashlistImporter) updateMovieIMDbID(ctx context.Context, movie *models.Movie) {

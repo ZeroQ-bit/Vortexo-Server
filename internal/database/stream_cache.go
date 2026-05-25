@@ -22,6 +22,12 @@ const cachedStreamSelectColumns = `
 	media_streams.next_check_at, media_streams.created_at, media_streams.updated_at
 `
 
+const streamOptionSelectColumns = `
+	media_stream_options.id, media_stream_options.media_type, media_stream_options.media_id, media_stream_options.movie_id, media_stream_options.series_id, media_stream_options.season, media_stream_options.episode, media_stream_options.stream_title, media_stream_options.stream_url, media_stream_options.stream_hash, media_stream_options.quality_score,
+	media_stream_options.resolution, media_stream_options.hdr_type, media_stream_options.audio_format, media_stream_options.source_type, media_stream_options.file_size_gb, media_stream_options.codec, media_stream_options.indexer,
+	media_stream_options.rd_torrent_id, media_stream_options.rd_file_id, media_stream_options.rd_library_added, media_stream_options.cached_at, media_stream_options.last_checked, media_stream_options.is_available, media_stream_options.created_at, media_stream_options.updated_at
+`
+
 // NewStreamCacheStore creates a new stream cache store
 func NewStreamCacheStore(db *sql.DB) *StreamCacheStore {
 	return &StreamCacheStore{db: db}
@@ -79,6 +85,183 @@ func (s *StreamCacheStore) GetCachedSeriesEpisode(ctx context.Context, seriesID,
 	}
 
 	return cached, nil
+}
+
+// GetStreamOptionsForMovie returns all saved selectable streams for a movie.
+func (s *StreamCacheStore) GetStreamOptionsForMovie(ctx context.Context, movieID, limit int) ([]*models.CachedStream, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_stream_options
+		WHERE movie_id = $1
+		  AND is_available = true
+		ORDER BY quality_score DESC, file_size_gb DESC, updated_at DESC
+		LIMIT $2
+	`, streamOptionSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, movieID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get movie stream options: %w", err)
+	}
+	defer rows.Close()
+
+	return scanStreamOptionRows(rows)
+}
+
+// GetStreamOptionsForSeriesEpisode returns all saved selectable streams for a
+// series episode.
+func (s *StreamCacheStore) GetStreamOptionsForSeriesEpisode(ctx context.Context, seriesID, season, episode, limit int) ([]*models.CachedStream, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_stream_options
+		WHERE series_id = $1
+		  AND season = $2
+		  AND episode = $3
+		  AND is_available = true
+		ORDER BY quality_score DESC, file_size_gb DESC, updated_at DESC
+		LIMIT $4
+	`, streamOptionSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, seriesID, season, episode, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get episode stream options: %w", err)
+	}
+	defer rows.Close()
+
+	return scanStreamOptionRows(rows)
+}
+
+// UpsertStreamOption stores one selectable Real-Debrid library stream for a
+// movie or episode without replacing the other options for that media item.
+func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *models.CachedStream) error {
+	if stream == nil {
+		return nil
+	}
+	if stream.MovieID > 0 {
+		query := `
+			INSERT INTO media_stream_options (
+				media_type, media_id, movie_id, stream_title, stream_url, stream_hash,
+				quality_score, resolution, hdr_type, audio_format, source_type,
+				file_size_gb, codec, indexer, rd_torrent_id, rd_file_id,
+				rd_library_added, cached_at, last_checked, is_available, created_at, updated_at
+			) VALUES (
+				'movie', $1, $2, $3, $4, $5,
+				$6, $7, $8, $9, $10,
+				$11, $12, $13, $14, $15,
+				$16, NOW(), NOW(), true, NOW(), NOW()
+			)
+			ON CONFLICT (movie_id, stream_hash, rd_file_id)
+			WHERE movie_id IS NOT NULL AND series_id IS NULL
+			DO UPDATE SET
+				stream_title = EXCLUDED.stream_title,
+				stream_url = EXCLUDED.stream_url,
+				quality_score = EXCLUDED.quality_score,
+				resolution = EXCLUDED.resolution,
+				hdr_type = EXCLUDED.hdr_type,
+				audio_format = EXCLUDED.audio_format,
+				source_type = EXCLUDED.source_type,
+				file_size_gb = EXCLUDED.file_size_gb,
+				codec = EXCLUDED.codec,
+				indexer = EXCLUDED.indexer,
+				rd_torrent_id = CASE
+					WHEN EXCLUDED.rd_torrent_id <> '' THEN EXCLUDED.rd_torrent_id
+					ELSE media_stream_options.rd_torrent_id
+				END,
+				rd_library_added = media_stream_options.rd_library_added OR EXCLUDED.rd_library_added,
+				last_checked = NOW(),
+				is_available = true,
+				updated_at = NOW()
+		`
+		_, err := s.db.ExecContext(ctx, query,
+			stream.MovieID,
+			stream.MovieID,
+			stream.StreamTitle,
+			stream.StreamURL,
+			stream.StreamHash,
+			stream.QualityScore,
+			stream.Resolution,
+			stream.HDRType,
+			stream.AudioFormat,
+			stream.SourceType,
+			stream.FileSizeGB,
+			stream.Codec,
+			stream.Indexer,
+			stream.RDTorrentID,
+			stream.RDFileID,
+			stream.RDLibraryAdded,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to upsert movie stream option: %w", err)
+		}
+		return nil
+	}
+
+	if stream.SeriesID <= 0 || stream.Season <= 0 || stream.Episode <= 0 {
+		return fmt.Errorf("missing media identity for stream option")
+	}
+	query := `
+		INSERT INTO media_stream_options (
+			media_type, media_id, series_id, season, episode, stream_title, stream_url, stream_hash,
+			quality_score, resolution, hdr_type, audio_format, source_type,
+			file_size_gb, codec, indexer, rd_torrent_id, rd_file_id,
+			rd_library_added, cached_at, last_checked, is_available, created_at, updated_at
+		) VALUES (
+			'series', $1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $17,
+			$18, NOW(), NOW(), true, NOW(), NOW()
+		)
+		ON CONFLICT (series_id, season, episode, stream_hash, rd_file_id)
+		WHERE series_id IS NOT NULL
+		DO UPDATE SET
+			stream_title = EXCLUDED.stream_title,
+			stream_url = EXCLUDED.stream_url,
+			quality_score = EXCLUDED.quality_score,
+			resolution = EXCLUDED.resolution,
+			hdr_type = EXCLUDED.hdr_type,
+			audio_format = EXCLUDED.audio_format,
+			source_type = EXCLUDED.source_type,
+			file_size_gb = EXCLUDED.file_size_gb,
+			codec = EXCLUDED.codec,
+			indexer = EXCLUDED.indexer,
+			rd_torrent_id = CASE
+				WHEN EXCLUDED.rd_torrent_id <> '' THEN EXCLUDED.rd_torrent_id
+				ELSE media_stream_options.rd_torrent_id
+			END,
+			rd_library_added = media_stream_options.rd_library_added OR EXCLUDED.rd_library_added,
+			last_checked = NOW(),
+			is_available = true,
+			updated_at = NOW()
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		stream.SeriesID,
+		stream.SeriesID,
+		stream.Season,
+		stream.Episode,
+		stream.StreamTitle,
+		stream.StreamURL,
+		stream.StreamHash,
+		stream.QualityScore,
+		stream.Resolution,
+		stream.HDRType,
+		stream.AudioFormat,
+		stream.SourceType,
+		stream.FileSizeGB,
+		stream.Codec,
+		stream.Indexer,
+		stream.RDTorrentID,
+		stream.RDFileID,
+		stream.RDLibraryAdded,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert episode stream option: %w", err)
+	}
+	return nil
 }
 
 // CacheStream stores or updates the cached stream for a media item
@@ -510,6 +693,88 @@ func (s *StreamCacheStore) GetPendingRealDebridLibraryAdds(ctx context.Context, 
 	return streams, nil
 }
 
+// GetPendingRealDebridStreamOptions retrieves saved selectable streams that
+// still need to be added to the user's Real-Debrid account.
+func (s *StreamCacheStore) GetPendingRealDebridStreamOptions(ctx context.Context, limit int) ([]*models.CachedStream, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_stream_options
+		LEFT JOIN library_movies m ON m.id = media_stream_options.movie_id
+		LEFT JOIN library_series srs ON srs.id = media_stream_options.series_id
+		WHERE media_stream_options.is_available = true
+		  AND COALESCE(media_stream_options.stream_hash, '') <> ''
+		  AND media_stream_options.rd_library_added = false
+		  AND (
+			media_stream_options.media_type <> 'movie'
+			OR COALESCE(NULLIF(m.metadata->>'release_date', '')::timestamptz <= NOW(), true)
+		  )
+		  AND (
+			media_stream_options.media_type <> 'series'
+			OR COALESCE(NULLIF(srs.metadata->>'first_air_date', '')::timestamptz <= NOW(), true)
+		  )
+		ORDER BY media_stream_options.updated_at ASC
+		LIMIT $1
+	`, streamOptionSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending Real-Debrid stream options: %w", err)
+	}
+	defer rows.Close()
+
+	return scanStreamOptionRows(rows)
+}
+
+func (s *StreamCacheStore) MarkStreamOptionRealDebridAddedByID(ctx context.Context, optionID int, torrentID string) error {
+	query := `
+		UPDATE media_stream_options
+		SET rd_library_added = true,
+		    rd_torrent_id = NULLIF($2, ''),
+		    last_checked = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, optionID, torrentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark Real-Debrid stream option add: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream option found for id %d", optionID)
+	}
+
+	return nil
+}
+
+func (s *StreamCacheStore) MarkStreamOptionUnavailableByID(ctx context.Context, optionID int, _ string) error {
+	query := `
+		UPDATE media_stream_options
+		SET is_available = false,
+		    rd_library_added = false,
+		    rd_torrent_id = '',
+		    last_checked = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, optionID)
+	if err != nil {
+		return fmt.Errorf("failed to mark stream option unavailable: %w", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream option found for id %d", optionID)
+	}
+
+	return nil
+}
+
 func (s *StreamCacheStore) ResetRDLibraryByCacheID(ctx context.Context, cacheID int, _ string) error {
 	query := `
 		UPDATE media_streams
@@ -579,6 +844,44 @@ func (s *StreamCacheStore) ResetRDLibraryMissingFrom(ctx context.Context, validT
 	if err != nil {
 		return 0, fmt.Errorf("failed to count missing RD library resets: %w", err)
 	}
+
+	optionSet := `
+		UPDATE media_stream_options
+		SET rd_library_added = false,
+		    rd_torrent_id = '',
+		    updated_at = NOW()
+		WHERE rd_library_added = true
+	`
+
+	var optionResult sql.Result
+	if len(validTorrentIDs) == 0 {
+		optionResult, err = s.db.ExecContext(ctx, optionSet)
+	} else {
+		ids := make([]string, 0, len(validTorrentIDs))
+		for id := range validTorrentIDs {
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			optionResult, err = s.db.ExecContext(ctx, optionSet)
+		} else {
+			optionResult, err = s.db.ExecContext(ctx, optionSet+`
+		  AND (
+		    COALESCE(rd_torrent_id, '') = ''
+		    OR NOT (rd_torrent_id = ANY($1))
+		  )
+		`, pq.Array(ids))
+		}
+	}
+	if err != nil {
+		return rows, fmt.Errorf("failed to reset missing RD stream option state: %w", err)
+	}
+	optionRows, err := optionResult.RowsAffected()
+	if err != nil {
+		return rows, fmt.Errorf("failed to count missing RD stream option resets: %w", err)
+	}
+	rows += optionRows
 	return rows, nil
 }
 
@@ -643,8 +946,106 @@ func (s *StreamCacheStore) GetStreamsWithUpgradesAvailable(ctx context.Context, 
 	return streams, nil
 }
 
+func scanStreamOptionRows(rows *sql.Rows) ([]*models.CachedStream, error) {
+	streams := make([]*models.CachedStream, 0)
+	for rows.Next() {
+		cached := &models.CachedStream{}
+		if err := scanStreamOption(rows, cached); err != nil {
+			return nil, fmt.Errorf("failed to scan stream option: %w", err)
+		}
+		streams = append(streams, cached)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating stream options: %w", err)
+	}
+	return streams, nil
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
+}
+
+func scanStreamOption(scanner rowScanner, cached *models.CachedStream) error {
+	var movieID sql.NullInt64
+	var seriesID sql.NullInt64
+	var season sql.NullInt64
+	var episode sql.NullInt64
+	var qualityScore sql.NullInt64
+	var fileSizeGB sql.NullFloat64
+	var rdFileID sql.NullInt64
+	var streamTitle sql.NullString
+	var streamURL sql.NullString
+	var streamHash sql.NullString
+	var resolution sql.NullString
+	var hdrType sql.NullString
+	var audioFormat sql.NullString
+	var sourceType sql.NullString
+	var codec sql.NullString
+	var indexer sql.NullString
+	var rdTorrentID sql.NullString
+
+	if err := scanner.Scan(
+		&cached.ID,
+		&cached.MediaType,
+		&cached.MediaID,
+		&movieID,
+		&seriesID,
+		&season,
+		&episode,
+		&streamTitle,
+		&streamURL,
+		&streamHash,
+		&qualityScore,
+		&resolution,
+		&hdrType,
+		&audioFormat,
+		&sourceType,
+		&fileSizeGB,
+		&codec,
+		&indexer,
+		&rdTorrentID,
+		&rdFileID,
+		&cached.RDLibraryAdded,
+		&cached.CachedAt,
+		&cached.LastChecked,
+		&cached.IsAvailable,
+		&cached.CreatedAt,
+		&cached.UpdatedAt,
+	); err != nil {
+		return err
+	}
+
+	cached.StreamTitle = streamTitle.String
+	cached.StreamURL = streamURL.String
+	cached.StreamHash = streamHash.String
+	cached.QualityScore = int(qualityScore.Int64)
+	cached.Resolution = resolution.String
+	cached.HDRType = hdrType.String
+	cached.AudioFormat = audioFormat.String
+	cached.SourceType = sourceType.String
+	cached.FileSizeGB = fileSizeGB.Float64
+	cached.Codec = codec.String
+	cached.Indexer = indexer.String
+	cached.RDTorrentID = rdTorrentID.String
+	cached.RDFileID = int(rdFileID.Int64)
+	cached.UpgradeAvailable = false
+	cached.CheckCount = 0
+	cached.NextCheckAt = cached.LastChecked
+
+	if movieID.Valid {
+		cached.MovieID = int(movieID.Int64)
+	}
+	if seriesID.Valid {
+		cached.SeriesID = int(seriesID.Int64)
+	}
+	if season.Valid {
+		cached.Season = int(season.Int64)
+	}
+	if episode.Valid {
+		cached.Episode = int(episode.Int64)
+	}
+
+	return nil
 }
 
 func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {

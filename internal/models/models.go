@@ -152,6 +152,7 @@ type CachedStream struct {
 	SeriesID         int        `json:"series_id"`
 	Season           int        `json:"season"`
 	Episode          int        `json:"episode"`
+	StreamTitle      string     `json:"stream_title"`
 	StreamURL        string     `json:"stream_url"`
 	StreamHash       string     `json:"stream_hash"`
 	QualityScore     int        `json:"quality_score"`
@@ -169,6 +170,7 @@ type CachedStream struct {
 	UpgradeAvailable bool       `json:"upgrade_available"`
 	RDLibraryAdded   bool       `json:"rd_library_added"`
 	RDTorrentID      string     `json:"rd_torrent_id"`
+	RDFileID         int        `json:"rd_file_id"`
 	RDLibraryAddedAt *time.Time `json:"rd_library_added_at,omitempty"`
 	NextCheckAt      time.Time  `json:"next_check_at"`
 	CreatedAt        time.Time  `json:"created_at"`

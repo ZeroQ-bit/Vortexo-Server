@@ -232,6 +232,14 @@ func (c *RealDebridClient) GetTorrentInfo(ctx context.Context, torrentID string)
 
 // ListTorrents retrieves a page of torrents currently present in the user's Real-Debrid account.
 func (c *RealDebridClient) ListTorrents(ctx context.Context, page, limit int) ([]rdTorrentListItem, error) {
+	return c.ListTorrentsFiltered(ctx, page, limit, "")
+}
+
+// ListTorrentsFiltered retrieves a filtered page of torrents currently present
+// in the user's Real-Debrid account. Real-Debrid applies the filter against the
+// torrent filename, which keeps large libraries searchable without walking every
+// page for common playback lookups.
+func (c *RealDebridClient) ListTorrentsFiltered(ctx context.Context, page, limit int, filter string) ([]rdTorrentListItem, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -246,6 +254,9 @@ func (c *RealDebridClient) ListTorrents(ctx context.Context, page, limit int) ([
 	params := url.Values{}
 	params.Set("page", strconv.Itoa(page))
 	params.Set("limit", strconv.Itoa(limit))
+	if strings.TrimSpace(filter) != "" {
+		params.Set("filter", strings.TrimSpace(filter))
+	}
 
 	data, err := c.makeRequest(ctx, "GET", endpoint, params, nil)
 	if err != nil {
@@ -261,7 +272,7 @@ func (c *RealDebridClient) ListTorrents(ctx context.Context, page, limit int) ([
 }
 
 func (c *RealDebridClient) ListAllTorrentIDs(ctx context.Context) (map[string]struct{}, error) {
-	const pageSize = 100
+	const pageSize = 5000
 
 	ids := make(map[string]struct{})
 	for page := 1; ; page++ {
@@ -325,7 +336,7 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		return "", fmt.Errorf("invalid torrent hash %q", truncateString(infoHash, 12))
 	}
 
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, 8*time.Second)
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, 20*time.Second)
 	info, torrentID, err := c.findTorrentInfoByHash(lookupCtx, infoHash)
 	cancelLookup()
 	createdTorrent := false
@@ -568,8 +579,8 @@ func (c *RealDebridClient) findTorrentInfoByHash(ctx context.Context, infoHash s
 		return nil, "", nil
 	}
 
-	const pageSize = 100
-	const maxPlaybackLookupPages = 3
+	const pageSize = 5000
+	const maxPlaybackLookupPages = 8
 	for page := 1; page <= maxPlaybackLookupPages; page++ {
 		if err := ctx.Err(); err != nil {
 			return nil, "", err

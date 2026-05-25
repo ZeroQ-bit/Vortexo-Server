@@ -313,6 +313,7 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 						func(torrentID string) error {
 							return cs.cacheStore.MarkRealDebridLibraryAddedForMovie(ctx, int(movie.ID), torrentID)
 						},
+						false,
 					); err != nil {
 						log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", movie.Title, err)
 					}
@@ -600,6 +601,7 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 		func(torrentID string) error {
 			return cs.cacheStore.MarkRealDebridLibraryAddedForSeriesEpisode(ctx, int(s.ID), season, episode, torrentID)
 		},
+		false,
 	); err != nil {
 		log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", seriesLabel, err)
 	}
@@ -713,9 +715,9 @@ func (cs *CacheScanner) shouldAutoAddBestStreamsToRealDebrid() bool {
 	return current != nil && current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid
 }
 
-func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, label, hash string, fileIdx int, markAdded func(string) error) error {
+func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, label, hash string, fileIdx int, markAdded func(string) error, force bool) error {
 	hash = normalizeTorrentHash(hash)
-	if !cs.shouldAutoAddBestStreamsToRealDebrid() || hash == "" {
+	if (!force && !cs.shouldAutoAddBestStreamsToRealDebrid()) || hash == "" {
 		return nil
 	}
 	if !isValidHash(hash) {
@@ -747,6 +749,41 @@ func (cs *CacheScanner) SyncPendingRealDebridLibraryAddsNow(ctx context.Context)
 	return cs.syncPendingRealDebridLibraryAddsWithMode(ctx, true)
 }
 
+type pendingRealDebridLibraryAdd struct {
+	stream *models.CachedStream
+	option bool
+}
+
+func (cs *CacheScanner) pendingRealDebridLibraryAdds(ctx context.Context, limit int) ([]pendingRealDebridLibraryAdd, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	legacy, err := cs.cacheStore.GetPendingRealDebridLibraryAdds(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	pending := make([]pendingRealDebridLibraryAdd, 0, limit)
+	for _, stream := range legacy {
+		pending = append(pending, pendingRealDebridLibraryAdd{stream: stream})
+	}
+
+	remaining := limit - len(pending)
+	if remaining <= 0 {
+		return pending, nil
+	}
+
+	options, err := cs.cacheStore.GetPendingRealDebridStreamOptions(ctx, remaining)
+	if err != nil {
+		return nil, err
+	}
+	for _, stream := range options {
+		pending = append(pending, pendingRealDebridLibraryAdd{stream: stream, option: true})
+	}
+
+	return pending, nil
+}
+
 func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Context, force bool) error {
 	const batchSize = 100
 
@@ -770,7 +807,7 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 
 	totalSynced := 0
 	for {
-		pending, err := cs.cacheStore.GetPendingRealDebridLibraryAdds(ctx, batchSize)
+		pending, err := cs.pendingRealDebridLibraryAdds(ctx, batchSize)
 		if err != nil {
 			return err
 		}
@@ -789,8 +826,15 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 		services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Syncing %d cached streams to Real-Debrid", len(pending)))
 
 		syncedThisBatch := 0
-		for _, stream := range pending {
+		for _, item := range pending {
+			stream := item.stream
+			if stream == nil {
+				continue
+			}
 			label := stream.MediaType + " " + strconv.Itoa(stream.MediaID)
+			if strings.TrimSpace(stream.StreamTitle) != "" {
+				label = stream.StreamTitle
+			}
 			hash := normalizeTorrentHash(stream.StreamHash)
 			if safeHash := extractHashFromURL(stream.StreamURL); isValidHash(safeHash) && safeHash != hash {
 				hash = safeHash
@@ -798,20 +842,33 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 			}
 			if !isValidHash(hash) {
 				log.Printf("[CACHE-SCANNER] Skipping cached stream %s %d because no valid torrent hash is available", stream.MediaType, stream.MediaID)
-				if markErr := cs.cacheStore.MarkUnavailableByCacheID(ctx, stream.ID, "retired cached stream with no valid torrent hash"); markErr != nil {
+				markUnavailable := cs.cacheStore.MarkUnavailableByCacheID
+				if item.option {
+					markUnavailable = cs.cacheStore.MarkStreamOptionUnavailableByID
+				}
+				if markErr := markUnavailable(ctx, stream.ID, "retired cached stream with no valid torrent hash"); markErr != nil {
 					log.Printf("[CACHE-SCANNER] Failed to retire cached stream %s %d with invalid hash: %v", stream.MediaType, stream.MediaID, markErr)
 				}
 				continue
 			}
-			fileIdx := extractFileIndexFromStreamURL(stream.StreamURL)
+			fileIdx := firstNonZero(stream.RDFileID, extractFileIndexFromStreamURL(stream.StreamURL))
+			markAdded := cs.cacheStore.MarkRealDebridLibraryAddedByID
+			if item.option {
+				markAdded = cs.cacheStore.MarkStreamOptionRealDebridAddedByID
+			}
+			markUnavailable := cs.cacheStore.MarkUnavailableByCacheID
+			if item.option {
+				markUnavailable = cs.cacheStore.MarkStreamOptionUnavailableByID
+			}
 			if err := cs.maybeAddCachedStreamToRealDebrid(
 				ctx,
 				label,
 				hash,
 				fileIdx,
 				func(torrentID string) error {
-					return cs.cacheStore.MarkRealDebridLibraryAddedByID(ctx, stream.ID, torrentID)
+					return markAdded(ctx, stream.ID, torrentID)
 				},
+				force,
 			); err != nil {
 				log.Printf("[CACHE-SCANNER] Failed to sync cached stream %s %d to Real-Debrid: %v", stream.MediaType, stream.MediaID, err)
 				errText := strings.ToLower(err.Error())
@@ -823,7 +880,7 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 				}
 				if isRealDebridInvalidMagnetError(err) {
 					message := fmt.Sprintf("retired invalid magnet source: %v", err)
-					if markErr := cs.cacheStore.MarkUnavailableByCacheID(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
+					if markErr := markUnavailable(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
 						log.Printf("[CACHE-SCANNER] Failed to retire invalid magnet source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
 					} else {
 						log.Printf("[CACHE-SCANNER] Retired invalid magnet source %s %d after Real-Debrid rejected it", stream.MediaType, stream.MediaID)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 )
@@ -186,6 +187,39 @@ func TestBuildVortexoSourcesPrioritizesRealDebridLibraryTorrent(t *testing.T) {
 	}
 }
 
+func TestVortexoCachedStreamToTorrentioKeepsSavedRealDebridOption(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+
+	stream := vortexoCachedStreamToTorrentio(models.CachedStream{
+		StreamTitle:    "M.I.A. 2026 S01 720p - PW",
+		StreamURL:      "magnet:?xt=urn:btih:" + hash,
+		StreamHash:     hash,
+		Resolution:     "720p",
+		FileSizeGB:     3.2,
+		Indexer:        vortexoRealDebridLibrarySource,
+		RDLibraryAdded: true,
+		RDTorrentID:    "rd-torrent-1",
+		RDFileID:       10,
+		IsAvailable:    true,
+	}, vortexoSourcesRequest{Type: "episode", Title: "M.I.A.", Year: 2026, Season: 1, Episode: 1})
+
+	if stream.Title != "M.I.A. 2026 S01 720p - PW" {
+		t.Fatalf("title = %q, want saved stream title", stream.Title)
+	}
+	if stream.Source != vortexoRealDebridLibrarySource {
+		t.Fatalf("source = %q, want Real-Debrid Library", stream.Source)
+	}
+	if stream.TorrentID != "rd-torrent-1" {
+		t.Fatalf("torrent ID = %q, want rd-torrent-1", stream.TorrentID)
+	}
+	if stream.FileIdx != 10 {
+		t.Fatalf("file index = %d, want 10", stream.FileIdx)
+	}
+	if stream.Quality != "720p" {
+		t.Fatalf("quality = %q, want 720p", stream.Quality)
+	}
+}
+
 func TestPrependVortexoPreferredStreamsKeepsRealDebridLibraryFirst(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 	preferred := []providers.TorrentioStream{{
@@ -209,6 +243,85 @@ func TestPrependVortexoPreferredStreamsKeepsRealDebridLibraryFirst(t *testing.T)
 	}
 	if got[0].TorrentID != "rd-torrent-1" {
 		t.Fatalf("first torrent ID = %q, want rd-torrent-1", got[0].TorrentID)
+	}
+}
+
+func TestVortexoRealDebridEpisodeFileMatchesExactEpisodeReference(t *testing.T) {
+	files := []services.RealDebridTorrentFile{
+		{ID: 1, Path: "/M.I.A. 2026 S01/Extras/sample.mkv", Bytes: 200_000},
+		{ID: 2, Path: "/M.I.A. 2026 S01/M.I.A.S01E01.Revenge.720p.mkv", Bytes: 3_200_000_000},
+		{ID: 3, Path: "/M.I.A. 2026 S01/M.I.A.S01E02.Splash.720p.mkv", Bytes: 3_100_000_000},
+	}
+
+	file, ok := vortexoRealDebridEpisodeFile(files, 1, 1, false)
+	if !ok {
+		t.Fatal("expected exact S01E01 file to match")
+	}
+	if file.ID != 2 {
+		t.Fatalf("matched file ID = %d, want 2", file.ID)
+	}
+}
+
+func TestVortexoRealDebridEpisodeFileFallsBackToSeasonPackOrdinal(t *testing.T) {
+	files := []services.RealDebridTorrentFile{
+		{ID: 10, Path: "/M.I.A. 2026 S01/01 - Revenge.mkv", Bytes: 3_200_000_000},
+		{ID: 11, Path: "/M.I.A. 2026 S01/02 - Splash.mkv", Bytes: 3_150_000_000},
+	}
+
+	file, ok := vortexoRealDebridEpisodeFile(files, 1, 1, true)
+	if !ok {
+		t.Fatal("expected ordinal season-pack file to match")
+	}
+	if file.ID != 10 {
+		t.Fatalf("matched file ID = %d, want 10", file.ID)
+	}
+}
+
+func TestVortexoRealDebridEpisodeFileDoesNotUseOrdinalWithoutSeasonPackSignal(t *testing.T) {
+	files := []services.RealDebridTorrentFile{
+		{ID: 10, Path: "/Downloads/01 - Revenge.mkv", Bytes: 3_200_000_000},
+	}
+
+	if file, ok := vortexoRealDebridEpisodeFile(files, 1, 1, false); ok {
+		t.Fatalf("unexpected ordinal fallback file: %#v", file)
+	}
+}
+
+func TestVortexoRealDebridLibrarySourceCacheKeepsSourcesVisible(t *testing.T) {
+	resetVortexoRealDebridLibrarySourceCacheForTest()
+
+	req := vortexoSourcesRequest{Type: "episode", Title: "M.I.A.", Year: 2026, Season: 1, Episode: 1}
+	cacheKey := vortexoRealDebridLibrarySourceCacheKey(req, 2026)
+	streams := []providers.TorrentioStream{{
+		Title:     "M.I.A. 2026 S01/01 - Revenge.mkv",
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		TorrentID: "rd-torrent-1",
+		FileIdx:   10,
+		Source:    vortexoRealDebridLibrarySource,
+	}}
+
+	cacheVortexoRealDebridLibrarySources(cacheKey, streams)
+	streams[0].Title = "mutated outside cache"
+
+	cached, ok := cachedVortexoRealDebridLibrarySources(cacheKey)
+	if !ok {
+		t.Fatal("expected cached Real-Debrid library sources")
+	}
+	if len(cached) != 1 {
+		t.Fatalf("cached source count = %d, want 1", len(cached))
+	}
+	if cached[0].Title != "M.I.A. 2026 S01/01 - Revenge.mkv" {
+		t.Fatalf("cached title = %q, want original title", cached[0].Title)
+	}
+}
+
+func TestVortexoRealDebridLibrarySearchFiltersIncludePunctuationVariants(t *testing.T) {
+	filters := vortexoRealDebridLibrarySearchFilters("M.I.A.")
+	got := strings.ToLower(strings.Join(filters, "|"))
+	for _, want := range []string{"m.i.a.", "m i a", "mia", "m.i.a", "m_i_a"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("filters %q missing %q", got, want)
+		}
 	}
 }
 
@@ -343,4 +456,10 @@ func resetVortexoBlockedSourcesForTest() {
 	vortexoBlockedSources.Lock()
 	vortexoBlockedSources.byHash = make(map[string]vortexoBlockedSource)
 	vortexoBlockedSources.Unlock()
+}
+
+func resetVortexoRealDebridLibrarySourceCacheForTest() {
+	vortexoRealDebridLibrarySourceCache.Lock()
+	vortexoRealDebridLibrarySourceCache.byKey = make(map[string]vortexoRealDebridLibrarySourceCacheEntry)
+	vortexoRealDebridLibrarySourceCache.Unlock()
 }
