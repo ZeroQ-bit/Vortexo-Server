@@ -256,6 +256,10 @@ func SetupRoutesWithXtream(handler *Handler, xtreamHandler interface{ RegisterRo
 	api.HandleFunc("/movies/{id}/videos/{video_id}/play", handler.PlayTrailer).Methods("GET", "HEAD")
 	api.HandleFunc("/series/{id}/videos/{video_id}/play", handler.PlayTrailer).Methods("GET", "HEAD")
 
+	// Cached public Plex Discover artwork
+	api.HandleFunc("/artwork/refresh", handler.TriggerPlexArtworkRefresh).Methods("POST")
+	api.HandleFunc("/artwork/{type}/{tmdb_id}", handler.GetPlexArtwork).Methods("GET")
+
 	// Discover / Trending
 	api.HandleFunc("/discover/trending", handler.GetTrending).Methods("GET")
 	api.HandleFunc("/discover/popular", handler.GetPopular).Methods("GET")

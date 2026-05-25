@@ -177,6 +177,7 @@ const (
 	ServiceBalkanVODSync     = "balkan_vod_sync"
 	ServiceRDLibrarySync     = "rd_library_sync"
 	ServiceDMMHashlistImport = "dmm_hashlist_import"
+	ServicePlexArtworkSync   = "plex_artwork_sync"
 )
 
 // InitializeDefaultServices sets up the default service definitions
@@ -193,4 +194,5 @@ func InitializeDefaultServices() {
 	GlobalScheduler.Register(ServiceBalkanVODSync, "Imports Ex-Yu VOD content from Balkan GitHub repos", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceRDLibrarySync, "Adds cached library streams to Real-Debrid so playback links stay available", 5*time.Minute, true)
 	GlobalScheduler.Register(ServiceDMMHashlistImport, "Imports high-confidence cached movies and episodes from DMM hashlists", 1*time.Hour, true)
+	GlobalScheduler.Register(ServicePlexArtworkSync, "Caches public Plex Discover artwork for local movies and shows", 24*time.Hour, true)
 }

@@ -102,6 +102,8 @@ func main() {
 
 	log.Println("✓ All settings loaded from database")
 
+	services.InitializeDefaultServices()
+
 	// Initialize components
 	tmdbClient := services.NewTMDBClient(cfg.TMDBAPIKey, cfg.FanartTVAPIKey)
 
@@ -151,6 +153,8 @@ func main() {
 	seriesStore := database.NewSeriesStore(db)
 	episodeStore := database.NewEpisodeStore(db)
 	collectionStore := database.NewCollectionStore(db)
+	plexArtworkStore := database.NewPlexArtworkCacheStore(db)
+	plexArtworkService := services.NewPlexArtworkService(plexArtworkStore)
 
 	// Create context for workers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -182,6 +186,9 @@ func main() {
 
 	// Worker 8: Balkan VOD Sync (every 24 hours)
 	go balkanVODSyncWorker(ctx, movieStore, seriesStore, tmdbClient, settingsManager, 24*time.Hour)
+
+	// Worker 9: Plex Discover artwork cache (every 24 hours)
+	go plexArtworkSyncWorker(ctx, plexArtworkService, 24*time.Hour)
 
 	log.Println("✅ All workers started successfully")
 	log.Println("========================================")
@@ -601,5 +608,37 @@ func runBalkanVODSync(ctx context.Context, movieStore *database.MovieStore, seri
 		log.Printf("❌ Balkan VOD Sync error: %v", err)
 	} else {
 		log.Println("✅ Balkan VOD Sync complete")
+	}
+}
+
+func plexArtworkSyncWorker(ctx context.Context, artworkService *services.PlexArtworkService, interval time.Duration) {
+	log.Printf("🖼️ Plex Artwork Sync Worker: Starting (interval: %v)", interval)
+
+	timer := time.NewTimer(10 * time.Minute)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("🖼️ Plex Artwork Sync Worker: Stopping")
+			return
+		case <-timer.C:
+		}
+
+		services.GlobalScheduler.MarkRunning(services.ServicePlexArtworkSync)
+		_, err := artworkService.SyncLibrary(ctx, services.PlexArtworkSyncOptions{
+			Limit:      2000,
+			Delay:      2 * time.Second,
+			StaleAfter: 30 * 24 * time.Hour,
+			Progress: func(processed, total int, message string) {
+				services.GlobalScheduler.UpdateProgress(services.ServicePlexArtworkSync, processed, total, message)
+			},
+		})
+		services.GlobalScheduler.MarkComplete(services.ServicePlexArtworkSync, err, interval)
+		if err != nil {
+			log.Printf("❌ Plex artwork sync error: %v", err)
+		}
+
+		timer.Reset(interval)
 	}
 }

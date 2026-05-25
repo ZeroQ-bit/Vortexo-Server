@@ -104,6 +104,7 @@ func main() {
 
 	// Initialize Phase 1 stream cache store
 	streamCacheStore := database.NewStreamCacheStore(db)
+	plexArtworkStore := database.NewPlexArtworkCacheStore(db)
 	log.Println("Database stores initialized")
 
 	// Initialize settings manager and load from database
@@ -591,6 +592,9 @@ func main() {
 	)
 	log.Println("✓ DMM hashlist importer initialized")
 
+	plexArtworkService := services.NewPlexArtworkService(plexArtworkStore)
+	log.Println("✓ Plex artwork cache service initialized")
+
 	// Worker context for graceful shutdown
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	_ = workerCancel // Used on shutdown
@@ -819,6 +823,43 @@ func main() {
 		}
 	}()
 
+	// Worker: Plex Discover artwork cache (daily, polite 2-second page throttle)
+	go func() {
+		interval := 24 * time.Hour
+		log.Printf("🖼️ Plex Artwork Sync Worker: Starting (interval: %v)", interval)
+
+		timer := time.NewTimer(10 * time.Minute)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-workerCtx.Done():
+				log.Println("🛑 Plex Artwork Sync Worker: Shutting down")
+				return
+			case <-timer.C:
+			}
+
+			status := services.GlobalScheduler.GetStatus(services.ServicePlexArtworkSync)
+			if status == nil || status.Enabled {
+				services.GlobalScheduler.MarkRunning(services.ServicePlexArtworkSync)
+				_, err := plexArtworkService.SyncLibrary(workerCtx, services.PlexArtworkSyncOptions{
+					Limit:      2000,
+					Delay:      2 * time.Second,
+					StaleAfter: 30 * 24 * time.Hour,
+					Progress: func(processed, total int, message string) {
+						services.GlobalScheduler.UpdateProgress(services.ServicePlexArtworkSync, processed, total, message)
+					},
+				})
+				services.GlobalScheduler.MarkComplete(services.ServicePlexArtworkSync, err, interval)
+				if err != nil {
+					log.Printf("❌ Plex artwork sync error: %v", err)
+				}
+			}
+
+			timer.Reset(interval)
+		}
+	}()
+
 	// Worker: Phase 1 Stream Checker (every hour)
 	if streamChecker != nil {
 		go func() {
@@ -911,6 +952,8 @@ func main() {
 		multiProvider,
 		mdbSyncService,
 		dmmHashlistImporter,
+		plexArtworkStore,
+		plexArtworkService,
 		streamCacheStore,
 		streamService,
 		cacheScanner,

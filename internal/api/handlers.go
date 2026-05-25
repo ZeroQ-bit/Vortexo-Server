@@ -74,6 +74,8 @@ type Handler struct {
 	streamProvider      *providers.MultiProvider
 	mdbSyncService      *services.MDBListSyncService
 	dmmHashlistImporter *services.DMMHashlistImporter
+	plexArtworkStore    *database.PlexArtworkCacheStore
+	plexArtworkService  *services.PlexArtworkService
 	// Phase 1: Smart Stream Caching
 	streamCacheStore *database.StreamCacheStore
 	streamService    interface{} // Will be *streams.StreamService if initialized
@@ -295,6 +297,8 @@ func NewHandlerWithComponents(
 	streamProvider *providers.MultiProvider,
 	mdbSyncService *services.MDBListSyncService,
 	dmmHashlistImporter *services.DMMHashlistImporter,
+	plexArtworkStore *database.PlexArtworkCacheStore,
+	plexArtworkService *services.PlexArtworkService,
 	streamCacheStore *database.StreamCacheStore,
 	streamService interface{},
 	cacheScanner *CacheScanner,
@@ -318,6 +322,8 @@ func NewHandlerWithComponents(
 		streamProvider:      streamProvider,
 		mdbSyncService:      mdbSyncService,
 		dmmHashlistImporter: dmmHashlistImporter,
+		plexArtworkStore:    plexArtworkStore,
+		plexArtworkService:  plexArtworkService,
 		streamCacheStore:    streamCacheStore,
 		streamService:       streamService,
 		cacheScanner:        cacheScanner,
@@ -4556,6 +4562,21 @@ func (h *Handler) runService(serviceName string) {
 			_, err = h.dmmHashlistImporter.Import(ctx)
 		} else {
 			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")
+		}
+
+	case services.ServicePlexArtworkSync:
+		interval = 24 * time.Hour
+		if h.plexArtworkService != nil {
+			_, err = h.plexArtworkService.SyncLibrary(ctx, services.PlexArtworkSyncOptions{
+				Limit:      2000,
+				Delay:      2 * time.Second,
+				StaleAfter: 30 * 24 * time.Hour,
+				Progress: func(processed, total int, message string) {
+					services.GlobalScheduler.UpdateProgress(services.ServicePlexArtworkSync, processed, total, message)
+				},
+			})
+		} else {
+			services.GlobalScheduler.UpdateProgress(services.ServicePlexArtworkSync, 0, 0, "Plex artwork service not initialized")
 		}
 
 	default:
