@@ -161,17 +161,6 @@ func main() {
 	// Provider settings
 	cfg.UseRealDebrid = appSettings.UseRealDebrid
 	cfg.UsePremiumize = appSettings.UsePremiumize
-	if len(appSettings.StremioAddons) > 0 {
-		// Convert settings.StremioAddon to config.StremioAddon
-		cfg.StremioAddons = make([]config.StremioAddon, len(appSettings.StremioAddons))
-		for i, addon := range appSettings.StremioAddons {
-			cfg.StremioAddons[i] = config.StremioAddon{
-				Name:    addon.Name,
-				URL:     addon.URL,
-				Enabled: addon.Enabled,
-			}
-		}
-	}
 
 	// Quality settings
 	if appSettings.MaxResolution > 0 {
@@ -415,17 +404,6 @@ func main() {
 		}
 	}
 
-	// Initialize Xtream Codes API handler
-	// Convert config.StremioAddon to providers.StremioAddon
-	stremioAddons := make([]providers.StremioAddon, len(currentSettings.StremioAddons))
-	for i, addon := range currentSettings.StremioAddons {
-		stremioAddons[i] = providers.StremioAddon{
-			Name:    addon.Name,
-			URL:     addon.URL,
-			Enabled: addon.Enabled,
-		}
-	}
-
 	// Get proxies from settings if enabled
 	var proxies []string
 	if settingsManager.Get().UseHTTPProxy && len(settingsManager.Get().HTTPProxies) > 0 {
@@ -434,7 +412,7 @@ func main() {
 	}
 
 	runtimeAddons := providers.BuildRuntimeAddons(
-		stremioAddons,
+		nil,
 		currentSettings.UseRealDebrid,
 		cfg.RealDebridAPIKey,
 		currentSettings.CometEnabled,
@@ -443,9 +421,6 @@ func main() {
 
 	// Create MultiProvider
 	multiProvider := providers.NewMultiProviderWithConfig(cfg.RealDebridAPIKey, runtimeAddons, tmdbClient, proxies)
-	if currentSettings.DMMProviderEnabled {
-		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
-	}
 	multiProvider.SetQualityFilterSettings(func() string {
 		return settingsManager.Get().ExcludedQualities
 	})
@@ -973,17 +948,7 @@ func main() {
 	log.Println("✓ Xtream Codes API enabled at /player_api.php")
 	log.Println("✓ REST API enabled at /api/v1")
 
-	// Log enabled addons
-	enabledAddons := []string{}
-	for _, addon := range cfg.StremioAddons {
-		if addon.Enabled {
-			enabledAddons = append(enabledAddons, addon.Name)
-		}
-	}
-	log.Println("✓ Stremio Addons enabled:", enabledAddons)
-
-	// Create HTTP server with extended timeouts for stream fetching
-	// Stremio addons can take up to 120 seconds to respond
+	// Create HTTP server with extended timeouts for stream resolution.
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.ListenPort),
 		Handler:      router,

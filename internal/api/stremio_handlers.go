@@ -1,8 +1,6 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -147,8 +145,7 @@ func (h *Handler) StremioManifestHandler(w http.ResponseWriter, r *http.Request)
 	settings := h.settingsManager.Get()
 	log.Printf("[Stremio] StremioManifestHandler: enabled=%v, token=%s, query_token=%s", settings.StremioAddon.Enabled, settings.StremioAddon.SharedToken, r.URL.Query().Get("token"))
 
-	// Allow if either: addon is explicitly enabled OR a token has been generated
-	if !settings.StremioAddon.Enabled && settings.StremioAddon.SharedToken == "" {
+	if !settings.StremioAddon.Enabled {
 		respondError(w, http.StatusNotFound, "Stremio addon is not configured")
 		return
 	}
@@ -229,8 +226,7 @@ func (h *Handler) StremioCatalogHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	settings := h.settingsManager.Get()
-	// Allow if either: addon is explicitly enabled OR a token has been generated
-	if !settings.StremioAddon.Enabled && settings.StremioAddon.SharedToken == "" {
+	if !settings.StremioAddon.Enabled {
 		log.Printf("[Stremio] StremioCatalogHandler: addon not configured (enabled=%v, token=%s)", settings.StremioAddon.Enabled, settings.StremioAddon.SharedToken)
 		respondError(w, http.StatusNotFound, "catalogs not configured")
 		return
@@ -656,8 +652,7 @@ func (h *Handler) StremioStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := h.settingsManager.Get()
-	// Allow if either: addon is explicitly enabled OR a token has been generated
-	if !settings.StremioAddon.Enabled && settings.StremioAddon.SharedToken == "" {
+	if !settings.StremioAddon.Enabled {
 		respondError(w, http.StatusNotFound, "Stremio addon is not configured")
 		return
 	}
@@ -759,28 +754,7 @@ func (h *Handler) StremioStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 // GenerateStremioToken generates a new random token for Stremio addon access
 func (h *Handler) GenerateStremioToken(w http.ResponseWriter, r *http.Request) {
-	// Generate a secure random token
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-
-	token := hex.EncodeToString(tokenBytes)
-
-	// Update settings with new token
-	if h.settingsManager != nil {
-		settings := h.settingsManager.Get()
-		settings.StremioAddon.SharedToken = token
-		if err := h.settingsManager.Update(settings); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to save token")
-			return
-		}
-	}
-
-	respondJSON(w, http.StatusOK, map[string]string{
-		"token": token,
-	})
+	respondError(w, http.StatusGone, "Stremio addon support has been removed")
 }
 
 // GetStremioManifestURL returns the full manifest URL for copying
@@ -794,8 +768,7 @@ func (h *Handler) GetStremioManifestURL(w http.ResponseWriter, r *http.Request) 
 	settings := h.settingsManager.Get()
 	log.Printf("[Stremio] GetStremioManifestURL: enabled=%v, token=%s, addon=%+v", settings.StremioAddon.Enabled, settings.StremioAddon.SharedToken, settings.StremioAddon)
 
-	// Allow if either: addon is explicitly enabled OR a token has been generated
-	if !settings.StremioAddon.Enabled && settings.StremioAddon.SharedToken == "" {
+	if !settings.StremioAddon.Enabled {
 		respondError(w, http.StatusBadRequest, "Stremio addon is not configured - generate a token first")
 		return
 	}

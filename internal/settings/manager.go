@@ -257,7 +257,7 @@ func getDefaultSettings() *Settings {
 		AutoCacheIntervalHours:      6,
 		UseRealDebrid:               true,
 		UsePremiumize:               false,
-		CometEnabled:                true,
+		CometEnabled:                false,
 		CometIndexers:               "bitorrent,therarbg,yts,eztv,thepiratebay",
 		CometOnlyShowCached:         true,      // Default to only cached for faster playback
 		CometMaxResults:             5,         // Default to 5 results per quality
@@ -270,23 +270,12 @@ func getDefaultSettings() *Settings {
 		DMMLibraryImportEnabled:     false,
 		StremioAddons:               []StremioAddon{}, // Empty by default - users should configure their own addons
 		StremioAddon: StremioAddonConfig{
-			Enabled:         true, // Enabled by default for built-in addon
-			PublicServerURL: "",
-			AddonName:       "Vortexo Server",
-			SharedToken:     "",
-			PerUserTokens:   false,
-			Catalogs: []StremioCatalogConfig{
-				{ID: "streamarr_recent", Type: "movie", Name: "Recently Added", Enabled: true},
-				{ID: "streamarr_recent_movies", Type: "movie", Name: "Recently Added Movies", Enabled: true},
-				{ID: "streamarr_recent_series", Type: "series", Name: "Recently Added Series", Enabled: true},
-				{ID: "streamarr_trending", Type: "movie", Name: "Trending Now", Enabled: true},
-				{ID: "streamarr_trending_movies", Type: "movie", Name: "Trending Now Movies", Enabled: true},
-				{ID: "streamarr_trending_series", Type: "series", Name: "Trending Now Series", Enabled: true},
-				{ID: "streamarr_popular", Type: "movie", Name: "Popular Now", Enabled: true},
-				{ID: "streamarr_popular_movies", Type: "movie", Name: "Popular Movies", Enabled: true},
-				{ID: "streamarr_popular_series", Type: "series", Name: "Popular TV Shows", Enabled: true},
-				{ID: "streamarr_coming_soon", Type: "movie", Name: "Coming Soon", Enabled: true},
-			},
+			Enabled:          false,
+			PublicServerURL:  "",
+			AddonName:        "Vortexo Server",
+			SharedToken:      "",
+			PerUserTokens:    false,
+			Catalogs:         []StremioCatalogConfig{},
 			CatalogPlacement: "both",
 		},
 		UseHTTPProxy:           false,
@@ -344,6 +333,7 @@ func (m *Manager) Load() error {
 	if err := applyLegacySettingAliases([]byte(settingsJSON), m.settings); err != nil {
 		return fmt.Errorf("parse legacy settings: %w", err)
 	}
+	disableRetiredProviderSettings(m.settings)
 
 	// Also load Xtream credentials from individual keys if they exist (for backward compatibility)
 	var xtreamUsername, xtreamPassword string
@@ -385,6 +375,19 @@ func applyLegacySettingAliases(raw []byte, settings *Settings) error {
 	return nil
 }
 
+func disableRetiredProviderSettings(st *Settings) {
+	if st == nil {
+		return
+	}
+	st.StremioAddons = nil
+	st.CometEnabled = false
+	st.DMMProviderEnabled = false
+	st.StremioAddon.Enabled = false
+	st.StremioAddon.SharedToken = ""
+	st.StremioAddon.PublicServerURL = ""
+	st.StremioAddon.Catalogs = nil
+}
+
 func (m *Manager) Get() *Settings {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -411,6 +414,7 @@ func (m *Manager) Update(newSettings *Settings) error {
 		isDisablingBalkan = true
 	}
 
+	disableRetiredProviderSettings(newSettings)
 	m.settings = newSettings
 	if err := m.saveToDBLocked(); err != nil {
 		m.mu.Unlock()
@@ -474,6 +478,7 @@ func (m *Manager) UpdatePartial(updates map[string]interface{}) error {
 		m.mu.Unlock()
 		return err
 	}
+	disableRetiredProviderSettings(m.settings)
 
 	if err := m.saveToDBLocked(); err != nil {
 		m.mu.Unlock()

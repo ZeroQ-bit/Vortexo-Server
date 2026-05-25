@@ -52,17 +52,26 @@ type vortexoSource struct {
 	FileName     string  `json:"file_name,omitempty"`
 	Season       int     `json:"season,omitempty"`
 	Episode      int     `json:"episode,omitempty"`
+	Priority     int     `json:"priority,omitempty"`
 	PlayURL      string  `json:"play_url"`
 	DirectURL    string  `json:"direct_url,omitempty"`
 	DownloadURL  string  `json:"download_url,omitempty"`
 }
 
 type vortexoPlayToken struct {
-	Hash    string `json:"hash,omitempty"`
-	URL     string `json:"url,omitempty"`
-	Title   string `json:"title,omitempty"`
-	FileIdx int    `json:"fileIdx,omitempty"`
+	Hash      string `json:"hash,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Title     string `json:"title,omitempty"`
+	FileIdx   int    `json:"fileIdx,omitempty"`
+	TorrentID string `json:"torrentId,omitempty"`
 }
+
+const (
+	vortexoRealDebridLibrarySource   = "Real-Debrid Library"
+	vortexoRealDebridLibraryPriority = 100
+	vortexoLibraryCacheSource        = "Vortexo Library Cache"
+	vortexoLibraryCachePriority      = 90
+)
 
 type vortexoBlockedSource struct {
 	Reason    string
@@ -122,15 +131,6 @@ func (h *Handler) VortexoCapabilities(w http.ResponseWriter, r *http.Request) {
 
 // VortexoSources returns server-resolved source options for private clients.
 func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
-	if h.streamProvider == nil {
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"matched":   false,
-			"available": false,
-			"sources":   []vortexoSource{},
-		})
-		return
-	}
-
 	var req vortexoSourcesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -143,60 +143,13 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imdbID, releaseYear, err := h.resolveVortexoIMDBID(r.Context(), req)
-	if err != nil {
-		log.Printf("[Vortexo] Could not resolve %s %q tmdb=%d: %v", req.Type, req.Title, req.TMDBID, err)
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"matched":   false,
-			"available": false,
-			"sources":   []vortexoSource{},
-		})
-		return
+	releaseYear := req.Year
+	libraryStreams := h.vortexoCachedLibraryStreams(r.Context(), req)
+	if rdLibraryStreams := h.vortexoRealDebridLibraryStreams(r.Context(), req, releaseYear); len(rdLibraryStreams) > 0 {
+		libraryStreams = prependVortexoPreferredStreams(rdLibraryStreams, libraryStreams)
 	}
 
-	var providerStreams []providers.TorrentioStream
-	if req.Type == "episode" {
-		providerStreams, err = h.streamProvider.GetSeriesStreams(imdbID, req.Season, req.Episode)
-		if err == nil {
-			providerStreams = filterVortexoEpisodeStreams(
-				providerStreams,
-				firstNonEmpty(req.ParentTitle, req.Title),
-				req.Season,
-				req.Episode,
-				releaseYear,
-			)
-		}
-	} else {
-		providerStreams, err = h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
-		if err == nil && req.Title != "" {
-			filtered := filterVortexoMovieStreams(providerStreams, req.Title, releaseYear)
-			if len(filtered) == 0 && releaseYear > 0 {
-				if fallbackStreams, fallbackErr := h.streamProvider.GetMovieStreams(imdbID); fallbackErr == nil {
-					filtered = filterVortexoMovieStreams(fallbackStreams, req.Title, releaseYear)
-				} else {
-					log.Printf("[Vortexo] Fallback movie stream lookup failed for %s: %v", imdbID, fallbackErr)
-				}
-			}
-			providerStreams = filtered
-		}
-	}
-	if err != nil {
-		log.Printf("[Vortexo] Stream lookup failed for %s %s: %v", req.Type, imdbID, err)
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"matched":   true,
-			"available": false,
-			"sources":   []vortexoSource{},
-		})
-		return
-	}
-
-	providerStreams = h.refreshVortexoCacheAvailability(
-		r.Context(),
-		providerStreams,
-		h.vortexoOnlyCachedSourcesEnabled(),
-	)
-
-	sources := h.buildVortexoSources(providerStreams, req)
+	sources := h.buildVortexoSources(libraryStreams, req)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"matched":   true,
 		"available": len(sources) > 0,
@@ -219,7 +172,7 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if token.URL != "" && token.Hash == "" {
+	if token.URL != "" && token.Hash == "" && token.TorrentID == "" {
 		if wantsVortexoPlayJSON(r) {
 			respondVortexoPlaybackURL(w, token.URL)
 			return
@@ -242,11 +195,18 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
-	streamURL, err := h.rdClient.GetStreamURLForFile(ctx, token.Hash, token.FileIdx, token.Title)
+	var streamURL string
+	if strings.TrimSpace(token.TorrentID) != "" {
+		streamURL, err = h.rdClient.GetStreamURLForTorrentID(ctx, token.TorrentID, token.FileIdx, token.Title)
+	} else {
+		streamURL, err = h.rdClient.GetStreamURLForFile(ctx, token.Hash, token.FileIdx, token.Title)
+	}
 	if err != nil {
 		log.Printf("[Vortexo] Failed to resolve source %q: %v", token.Title, err)
 		if isRealDebridBlockedPlaybackError(err) {
-			markVortexoSourceBlocked(token.Hash, "infringing_file")
+			if token.Hash != "" {
+				markVortexoSourceBlocked(token.Hash, "infringing_file")
+			}
 			respondError(w, http.StatusGone, safeVortexoPlaybackError(err))
 			return
 		}
@@ -1155,6 +1115,304 @@ func applyVortexoCacheAvailability(
 	return refreshed
 }
 
+func (h *Handler) vortexoRealDebridLibraryStreams(ctx context.Context, req vortexoSourcesRequest, releaseYear int) []providers.TorrentioStream {
+	if h == nil || h.rdClient == nil {
+		return nil
+	}
+
+	requestedTitle := firstNonEmpty(req.ParentTitle, req.Title)
+	if strings.TrimSpace(requestedTitle) == "" {
+		return nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	const pageSize = 100
+	const maxPages = 5
+	const maxMatches = 8
+
+	streams := make([]providers.TorrentioStream, 0, 2)
+	seen := make(map[string]bool)
+	for page := 1; page <= maxPages && len(streams) < maxMatches; page++ {
+		torrents, err := h.rdClient.ListTorrents(lookupCtx, page, pageSize)
+		if err != nil {
+			log.Printf("[Vortexo] Real-Debrid library source lookup failed on page %d: %v", page, err)
+			break
+		}
+		if len(torrents) == 0 {
+			break
+		}
+
+		for _, torrent := range torrents {
+			if len(streams) >= maxMatches {
+				break
+			}
+			if !strings.EqualFold(strings.TrimSpace(torrent.Status), "downloaded") {
+				continue
+			}
+
+			hash := normalizeTorrentHash(torrent.Hash)
+			if !isValidHash(hash) || isVortexoSourceBlocked(hash) {
+				continue
+			}
+
+			stream := vortexoRealDebridTorrentListStream(torrent)
+			if !vortexoSourceRequestMatches(stream, req, releaseYear) {
+				continue
+			}
+
+			if req.Type == "episode" {
+				info, err := h.rdClient.GetTorrentInfo(lookupCtx, torrent.ID)
+				if err != nil {
+					log.Printf("[Vortexo] Real-Debrid library torrent info failed for %s: %v", torrent.ID, err)
+					continue
+				}
+				if file, ok := vortexoRealDebridEpisodeFile(info.Files, req.Season, req.Episode); ok {
+					stream.Title = vortexoRealDebridFileDisplayName(file.Path)
+					stream.Name = stream.Title
+					stream.BehaviorHints.Filename = stream.Title
+					stream.FileIdx = file.ID
+					if file.Bytes > 0 {
+						stream.Size = file.Bytes
+					}
+				} else if _, _, ok := parseVortexoEpisodeReference(vortexoStreamTitleText(stream)); !ok {
+					continue
+				}
+			}
+
+			key := fmt.Sprintf("%s|%d", hash, stream.FileIdx)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			streams = append(streams, stream)
+		}
+
+		if len(torrents) < pageSize {
+			break
+		}
+	}
+
+	if len(streams) > 0 {
+		log.Printf("[Vortexo] Prioritizing %d downloaded Real-Debrid library sources for %q", len(streams), requestedTitle)
+	}
+	return streams
+}
+
+func (h *Handler) vortexoCachedLibraryStreams(ctx context.Context, req vortexoSourcesRequest) []providers.TorrentioStream {
+	if h == nil || h.streamCacheStore == nil {
+		return nil
+	}
+
+	switch req.Type {
+	case "movie":
+		if h.movieStore == nil || req.TMDBID <= 0 {
+			return nil
+		}
+		movie, err := h.movieStore.GetByTMDBID(ctx, req.TMDBID)
+		if err != nil || movie == nil {
+			return nil
+		}
+		cached, err := h.streamCacheStore.GetCachedStream(ctx, int(movie.ID))
+		if err != nil {
+			log.Printf("[Vortexo] Cached library movie source lookup failed for tmdb=%d: %v", req.TMDBID, err)
+			return nil
+		}
+		if cached == nil || !cached.IsAvailable {
+			return nil
+		}
+		return []providers.TorrentioStream{vortexoCachedStreamToTorrentio(*cached, req)}
+	case "episode":
+		if h.seriesStore == nil || req.TMDBID <= 0 || req.Season <= 0 || req.Episode <= 0 {
+			return nil
+		}
+		series, err := h.seriesStore.GetByTMDBID(ctx, req.TMDBID)
+		if err != nil || series == nil {
+			return nil
+		}
+		cached, err := h.streamCacheStore.GetCachedSeriesEpisode(ctx, int(series.ID), req.Season, req.Episode)
+		if err != nil {
+			log.Printf("[Vortexo] Cached library episode source lookup failed for tmdb=%d S%02dE%02d: %v", req.TMDBID, req.Season, req.Episode, err)
+			return nil
+		}
+		if cached == nil || !cached.IsAvailable {
+			return nil
+		}
+		return []providers.TorrentioStream{vortexoCachedStreamToTorrentio(*cached, req)}
+	default:
+		return nil
+	}
+}
+
+func vortexoCachedStreamToTorrentio(cached models.CachedStream, req vortexoSourcesRequest) providers.TorrentioStream {
+	hash := normalizeTorrentHash(cached.StreamHash)
+	if !isValidHash(hash) {
+		hash = extractHashFromURL(cached.StreamURL)
+	}
+
+	title := vortexoCachedStreamTitle(cached, req)
+	source := vortexoLibraryCacheSource
+	if cached.RDLibraryAdded || strings.TrimSpace(cached.RDTorrentID) != "" {
+		source = vortexoRealDebridLibrarySource
+	}
+	streamURL := strings.TrimSpace(cached.StreamURL)
+	if streamURL == "" && isValidHash(hash) {
+		streamURL = "magnet:?xt=urn:btih:" + hash
+	}
+
+	return providers.TorrentioStream{
+		Name:      title,
+		Title:     title,
+		InfoHash:  hash,
+		TorrentID: strings.TrimSpace(cached.RDTorrentID),
+		FileIdx:   extractFileIndexFromStreamURL(cached.StreamURL),
+		URL:       streamURL,
+		Quality:   cached.Resolution,
+		Size:      int64(cached.FileSizeGB * 1024 * 1024 * 1024),
+		Cached:    true,
+		Source:    source,
+	}
+}
+
+func vortexoCachedStreamTitle(cached models.CachedStream, req vortexoSourcesRequest) string {
+	title := firstNonEmpty(req.ParentTitle, req.Title)
+	if req.Type == "episode" {
+		title = fmt.Sprintf("%s S%02dE%02d", title, req.Season, req.Episode)
+	}
+	details := strings.Join(strings.Fields(strings.Join([]string{
+		cached.Resolution,
+		cached.HDRType,
+		cached.Codec,
+		cached.AudioFormat,
+		cached.Indexer,
+	}, " ")), " ")
+	if details != "" {
+		title = strings.TrimSpace(title + " " + details)
+	}
+	if title != "" {
+		return title
+	}
+	return firstNonEmpty(cached.StreamURL, cached.StreamHash, "Vortexo cached stream")
+}
+
+func vortexoRealDebridTorrentListStream(torrent services.RealDebridTorrentListItem) providers.TorrentioStream {
+	hash := normalizeTorrentHash(torrent.Hash)
+	title := strings.TrimSpace(torrent.Filename)
+	parsed := streammeta.ParseQualityFromTorrentName(title)
+	return providers.TorrentioStream{
+		Name:      title,
+		Title:     title,
+		InfoHash:  hash,
+		TorrentID: strings.TrimSpace(torrent.ID),
+		URL:       "magnet:?xt=urn:btih:" + hash,
+		Quality:   parsed.Resolution,
+		Size:      torrent.Bytes,
+		Cached:    true,
+		Source:    vortexoRealDebridLibrarySource,
+	}
+}
+
+func vortexoSourceRequestMatches(stream providers.TorrentioStream, req vortexoSourcesRequest, releaseYear int) bool {
+	if vortexoStreamLooksAdult(stream) {
+		return false
+	}
+	switch req.Type {
+	case "episode":
+		return vortexoEpisodeStreamMatches(
+			stream,
+			firstNonEmpty(req.ParentTitle, req.Title),
+			req.Season,
+			req.Episode,
+			releaseYear,
+		)
+	case "movie":
+		return vortexoMovieStreamMatchesTitle(stream, req.Title, releaseYear)
+	default:
+		return false
+	}
+}
+
+func vortexoRealDebridEpisodeFile(files []services.RealDebridTorrentFile, season, episode int) (services.RealDebridTorrentFile, bool) {
+	var best services.RealDebridTorrentFile
+	var bestBytes int64
+	for _, file := range files {
+		if !vortexoRealDebridFileLooksPlayable(file.Path) {
+			continue
+		}
+		fileSeason, fileEpisode, ok := parseVortexoEpisodeReference(file.Path)
+		if !ok || fileSeason != season || fileEpisode != episode {
+			continue
+		}
+		if file.Bytes >= bestBytes {
+			best = file
+			bestBytes = file.Bytes
+		}
+	}
+	return best, best.ID > 0
+}
+
+func vortexoRealDebridFileLooksPlayable(path string) bool {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	for _, ext := range []string{".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".webm"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func vortexoRealDebridFileDisplayName(path string) string {
+	path = strings.TrimSpace(strings.ReplaceAll(path, "\\", "/"))
+	path = strings.TrimLeft(path, "/")
+	if path == "" {
+		return "Real-Debrid library file"
+	}
+	return path
+}
+
+func prependVortexoPreferredStreams(preferred, existing []providers.TorrentioStream) []providers.TorrentioStream {
+	combined := make([]providers.TorrentioStream, 0, len(preferred)+len(existing))
+	seen := make(map[string]bool)
+	appendStream := func(stream providers.TorrentioStream) {
+		key := vortexoStreamDedupKey(stream)
+		if key != "" {
+			if seen[key] {
+				return
+			}
+			seen[key] = true
+		}
+		combined = append(combined, stream)
+	}
+	for _, stream := range preferred {
+		appendStream(stream)
+	}
+	for _, stream := range existing {
+		appendStream(stream)
+	}
+	return combined
+}
+
+func vortexoStreamDedupKey(stream providers.TorrentioStream) string {
+	if hash := vortexoStreamHash(stream); hash != "" {
+		return fmt.Sprintf("hash:%s:%d", hash, stream.FileIdx)
+	}
+	if direct := directVortexoPlaybackURL(stream.URL); direct != "" {
+		return "url:" + direct
+	}
+	return ""
+}
+
+func vortexoStreamSourcePriority(stream providers.TorrentioStream) int {
+	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoRealDebridLibrarySource) {
+		return vortexoRealDebridLibraryPriority
+	}
+	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoLibraryCacheSource) {
+		return vortexoLibraryCachePriority
+	}
+	return 0
+}
+
 func vortexoStreamHash(stream providers.TorrentioStream) string {
 	hash := normalizeTorrentHash(stream.InfoHash)
 	if !isValidHash(hash) && stream.URL != "" {
@@ -1197,9 +1455,10 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 		}
 
 		token := vortexoPlayToken{
-			Hash:    hash,
-			Title:   stream.Title,
-			FileIdx: stream.FileIdx,
+			Hash:      hash,
+			Title:     stream.Title,
+			FileIdx:   stream.FileIdx,
+			TorrentID: strings.TrimSpace(stream.TorrentID),
 		}
 		if directURL != "" {
 			token.Hash = ""
@@ -1208,7 +1467,7 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			token.Hash = ""
 			token.URL = stream.URL
 		}
-		if token.Hash == "" && token.URL == "" {
+		if token.Hash == "" && token.URL == "" && token.TorrentID == "" {
 			continue
 		}
 
@@ -1240,6 +1499,7 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			Seeders:      stream.Seeders,
 			SizeGB:       sizeGB,
 			FileName:     stream.Title,
+			Priority:     vortexoStreamSourcePriority(stream),
 			PlayURL:      "/api/v1/vortexo/play/" + id,
 		}
 		if directURL != "" {

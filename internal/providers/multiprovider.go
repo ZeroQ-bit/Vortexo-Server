@@ -17,6 +17,7 @@ type TorrentioStream struct {
 	Name          string `json:"name"`
 	Title         string `json:"title"`
 	InfoHash      string `json:"infoHash"`
+	TorrentID     string `json:"torrentId,omitempty"`
 	FileIdx       int    `json:"fileIdx,omitempty"`
 	URL           string `json:"url"`
 	Quality       string `json:"quality,omitempty"`
@@ -44,9 +45,8 @@ type StreamProvider interface {
 }
 
 type MultiProvider struct {
-	Providers         []StreamProvider
-	ProviderNames     []string
-	dmmDirectProvider *DMMDirectProvider // Direct DMM queries
+	Providers     []StreamProvider
+	ProviderNames []string
 	// Settings getters for dynamic configuration
 	getSortOrder         func() string
 	getSortPrefer        func() string
@@ -66,7 +66,7 @@ func NewMultiProvider(rdAPIKey string, addons []StremioAddon, tmdbClient *servic
 
 // Removed NewMultiProviderWithZilean (deprecated)
 
-func NewMultiProviderWithConfig(rdAPIKey string, addons []StremioAddon, tmdbClient *services.TMDBClient, proxies []string) *MultiProvider {
+func NewMultiProviderWithConfig(rdAPIKey string, addons []StremioAddon, _ *services.TMDBClient, proxies []string) *MultiProvider {
 	mp := &MultiProvider{
 		Providers:     make([]StreamProvider, 0),
 		ProviderNames: make([]string, 0),
@@ -82,68 +82,23 @@ func NewMultiProviderWithConfig(rdAPIKey string, addons []StremioAddon, tmdbClie
 		log.Printf("Loaded Stremio addon: %s (%s)", addon.Name, addon.URL)
 	}
 
-	// Add fallback free providers if no provider addons are available.
 	if len(mp.Providers) == 0 {
-		if strings.TrimSpace(rdAPIKey) != "" {
-			log.Println("⚠️  No enabled Stremio provider addons configured; using fallback free providers only")
-		} else {
-			log.Println("⚠️  No enabled Stremio provider addons or Real-Debrid key configured; using fallback free providers")
-		}
-
-		// Add AutoEmbed provider
-		if tmdbClient != nil {
-			autoEmbedProvider := NewAutoEmbedAdapter(tmdbClient)
-			mp.Providers = append(mp.Providers, autoEmbedProvider)
-			mp.ProviderNames = append(mp.ProviderNames, "AutoEmbed")
-			log.Println("✓ AutoEmbed fallback provider loaded")
-		}
-
-		// Add VidSrc provider
-		if tmdbClient != nil {
-			vidSrcProvider := NewVidSrcAdapter(tmdbClient)
-			mp.Providers = append(mp.Providers, vidSrcProvider)
-			mp.ProviderNames = append(mp.ProviderNames, "VidSrc")
-			log.Println("✓ VidSrc fallback provider loaded")
-		}
+		log.Println("No external stream providers configured; using Real-Debrid library and cached library streams only")
 	}
 
 	return mp
 }
 
-// EnableDMMDirect appends Debrid Media Manager as an additional cached stream provider.
-func (mp *MultiProvider) EnableDMMDirect(rdAPIKey, dmmURL string) {
-	if mp == nil {
-		return
-	}
-
-	provider := NewDMMDirectProviderWithURL(rdAPIKey, dmmURL)
-	mp.Providers = append(mp.Providers, provider)
-	mp.ProviderNames = append(mp.ProviderNames, "DMM")
-	mp.dmmDirectProvider = provider
-	log.Printf("✓ DMM direct provider loaded (%s)", provider.DMMURL)
-}
-
-// BuildRuntimeAddons normalizes the saved addon list and bootstraps a sane
-// default for Real-Debrid-backed installs when no explicit provider addons are
-// enabled yet.
+// BuildRuntimeAddons keeps provider discovery disabled. Provider addons remain
+// in older settings payloads for migration compatibility, but runtime playback
+// now uses the Real-Debrid library plus Vortexo's imported stream cache.
 func BuildRuntimeAddons(addons []StremioAddon, useRealDebrid bool, rdAPIKey string, _ bool, _ string) []StremioAddon {
-	normalized := normalizeEnabledAddons(addons)
-	if len(normalized) > 0 {
-		return normalized
+	if len(normalizeEnabledAddons(addons)) > 0 {
+		log.Println("Configured Stremio provider addons are ignored; provider discovery is disabled")
+	} else if useRealDebrid && strings.TrimSpace(rdAPIKey) != "" {
+		log.Println("Provider discovery disabled; using Real-Debrid library and cached library streams")
 	}
-
-	if !useRealDebrid || strings.TrimSpace(rdAPIKey) == "" {
-		return normalized
-	}
-
-	runtimeAddons := []StremioAddon{{
-		Name:    "Torrentio",
-		URL:     DefaultTorrentioAddonURL,
-		Enabled: true,
-	}}
-
-	log.Printf("No enabled Stremio provider addons configured; bootstrapping defaults: %v", addonNames(runtimeAddons))
-	return runtimeAddons
+	return nil
 }
 
 func normalizeEnabledAddons(addons []StremioAddon) []StremioAddon {

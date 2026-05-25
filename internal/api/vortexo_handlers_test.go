@@ -148,6 +148,70 @@ func TestBuildVortexoSourcesResolvesTorrentioURLThroughRealDebrid(t *testing.T) 
 	}
 }
 
+func TestBuildVortexoSourcesPrioritizesRealDebridLibraryTorrent(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	handler := &Handler{}
+
+	sources := handler.buildVortexoSources([]providers.TorrentioStream{{
+		Name:      "M.I.A. 2026 S01E01 720p - PW.mkv",
+		Title:     "M.I.A. 2026 S01E01 720p - PW.mkv",
+		InfoHash:  hash,
+		TorrentID: "rd-torrent-1",
+		FileIdx:   2,
+		URL:       "magnet:?xt=urn:btih:" + hash,
+		Cached:    true,
+		Source:    vortexoRealDebridLibrarySource,
+		Size:      3_200_000_000,
+	}}, vortexoSourcesRequest{Type: "episode", Title: "M.I.A.", Year: 2026, Season: 1, Episode: 1})
+
+	if len(sources) != 1 {
+		t.Fatalf("buildVortexoSources returned %d sources, want 1", len(sources))
+	}
+	if sources[0].Priority != vortexoRealDebridLibraryPriority {
+		t.Fatalf("priority = %d, want %d", sources[0].Priority, vortexoRealDebridLibraryPriority)
+	}
+
+	token, err := decodeVortexoPlayToken(sources[0].ID)
+	if err != nil {
+		t.Fatalf("decodeVortexoPlayToken failed: %v", err)
+	}
+	if token.TorrentID != "rd-torrent-1" {
+		t.Fatalf("token.TorrentID = %q, want rd-torrent-1", token.TorrentID)
+	}
+	if token.Hash != hash {
+		t.Fatalf("token.Hash = %q, want %q", token.Hash, hash)
+	}
+	if token.FileIdx != 2 {
+		t.Fatalf("token.FileIdx = %d, want 2", token.FileIdx)
+	}
+}
+
+func TestPrependVortexoPreferredStreamsKeepsRealDebridLibraryFirst(t *testing.T) {
+	const hash = "0123456789abcdef0123456789abcdef01234567"
+	preferred := []providers.TorrentioStream{{
+		Title:     "M.I.A. 2026 S01E01 720p - PW.mkv",
+		InfoHash:  hash,
+		TorrentID: "rd-torrent-1",
+		FileIdx:   1,
+		Source:    vortexoRealDebridLibrarySource,
+	}}
+	existing := []providers.TorrentioStream{
+		{Title: "M.I.A. S01E01 2160p WEB-DL", InfoHash: hash, FileIdx: 1, Source: "DMM"},
+		{Title: "M.I.A. S01E01 1080p WEB-DL", InfoHash: "fedcba9876543210fedcba9876543210fedcba98", Source: "DMM"},
+	}
+
+	got := prependVortexoPreferredStreams(preferred, existing)
+	if len(got) != 2 {
+		t.Fatalf("combined streams = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Source != vortexoRealDebridLibrarySource {
+		t.Fatalf("first source = %q, want Real-Debrid Library", got[0].Source)
+	}
+	if got[0].TorrentID != "rd-torrent-1" {
+		t.Fatalf("first torrent ID = %q, want rd-torrent-1", got[0].TorrentID)
+	}
+}
+
 func TestDirectVortexoPlaybackURLKeepsRealDebridDownloadURL(t *testing.T) {
 	const directURL = "https://syd5-4.download.real-debrid.com/d/QZBMYCQLC2DZG107/Memory.of.a.Killer.S01E03.720p.HEVC.x265-MeGusta%5BEZTVx.to%5D.mkv"
 

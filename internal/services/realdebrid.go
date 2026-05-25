@@ -85,8 +85,14 @@ type rdTorrentListItem struct {
 	ID       string `json:"id"`
 	Filename string `json:"filename"`
 	Hash     string `json:"hash"`
+	Bytes    int64  `json:"bytes"`
 	Status   string `json:"status"`
+	Added    string `json:"added"`
 }
+
+type RealDebridTorrentInfo = rdTorrentInfo
+type RealDebridTorrentFile = rdTorrentFile
+type RealDebridTorrentListItem = rdTorrentListItem
 
 type rdInstantAvailability struct {
 	Hash string                 `json:"-"`
@@ -302,6 +308,14 @@ func (c *RealDebridClient) GetStreamURL(ctx context.Context, infoHash string) (s
 	return c.GetStreamURLForFile(ctx, infoHash, 0, "")
 }
 
+func (c *RealDebridClient) GetStreamURLForTorrentID(ctx context.Context, torrentID string, fileIndex int, preferredName string) (string, error) {
+	torrentID = strings.TrimSpace(torrentID)
+	if torrentID == "" {
+		return "", fmt.Errorf("missing Real-Debrid torrent ID")
+	}
+	return c.resolveTorrentToStreamURL(ctx, torrentID, fileIndex, preferredName, nil)
+}
+
 // GetStreamURLForFile gets a direct streaming URL for the requested torrent
 // file. Stremio-style sources can include a file index; DMM sources usually do
 // not, so the preferred name and largest-video fallback keep selection stable.
@@ -361,9 +375,23 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		_ = c.DeleteTorrent(ctx, torrentID)
 	}
 
-	info, err = c.waitForTorrentSelectionInfo(ctx, torrentID)
+	return c.resolveTorrentToStreamURL(ctx, torrentID, fileIndex, preferredName, cleanupCreatedTorrent)
+}
+
+func (c *RealDebridClient) resolveTorrentToStreamURL(
+	ctx context.Context,
+	torrentID string,
+	fileIndex int,
+	preferredName string,
+	cleanup func(*rdTorrentInfo),
+) (string, error) {
+	if cleanup == nil {
+		cleanup = func(*rdTorrentInfo) {}
+	}
+
+	info, err := c.waitForTorrentSelectionInfo(ctx, torrentID)
 	if err != nil {
-		cleanupCreatedTorrent(info)
+		cleanup(info)
 		return "", fmt.Errorf("failed to get torrent info: %w", err)
 	}
 	fmt.Printf("[RD-DEBUG] Torrent status: %s, Links: %d, Bytes: %d\n", info.Status, len(info.Links), info.Bytes)
@@ -371,7 +399,7 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 
 	// Check if torrent is ready - should be "downloaded" for cached torrents
 	if info.Status != "downloaded" && info.Status != "waiting_files_selection" {
-		cleanupCreatedTorrent(info)
+		cleanup(info)
 		return "", fmt.Errorf("torrent not cached (status: %s)", info.Status)
 	}
 
@@ -383,13 +411,13 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		}
 		fmt.Printf("[RD-DEBUG] Selecting files for torrent %s: %v\n", torrentID, fileIDs)
 		if err := c.SelectFiles(ctx, torrentID, fileIDs); err != nil {
-			cleanupCreatedTorrent(info)
+			cleanup(info)
 			return "", fmt.Errorf("failed to select files: %w", err)
 		}
 
 		info, err = c.waitForDownloadLinks(ctx, torrentID)
 		if err != nil {
-			cleanupCreatedTorrent(info)
+			cleanup(info)
 			return "", fmt.Errorf("failed to wait for selected files: %w", err)
 		}
 		fmt.Printf("[RD-DEBUG] After file selection - Status: %s, Links: %d\n", info.Status, len(info.Links))
@@ -400,27 +428,27 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 		// If still not downloaded after selection, it's not cached - delete it
 		if info.Status != "downloaded" {
 			fmt.Printf("[RD-DEBUG] Torrent not instantly cached (status: %s)\n", info.Status)
-			cleanupCreatedTorrent(info)
+			cleanup(info)
 			return "", fmt.Errorf("torrent not cached on RD (status: %s)", info.Status)
 		}
 	}
 	if info.Status == "downloaded" && len(info.Links) == 0 {
 		info, err = c.waitForDownloadLinks(ctx, torrentID)
 		if err != nil {
-			cleanupCreatedTorrent(info)
+			cleanup(info)
 			return "", fmt.Errorf("failed to wait for download links: %w", err)
 		}
 	}
 
 	// Get the first link
 	if len(info.Links) == 0 {
-		cleanupCreatedTorrent(info)
+		cleanup(info)
 		return "", fmt.Errorf("no download links available (status: %s)", info.Status)
 	}
 
 	link, err := chooseRDDownloadLink(info, targetFileID, fileIndex, preferredName)
 	if err != nil {
-		cleanupCreatedTorrent(info)
+		cleanup(info)
 		return "", err
 	}
 
@@ -428,7 +456,7 @@ func (c *RealDebridClient) GetStreamURLForFile(ctx context.Context, infoHash str
 	// Unrestrict the link to get direct download URL
 	unrestricted, err := c.UnrestrictLink(ctx, link)
 	if err != nil {
-		cleanupCreatedTorrent(info)
+		cleanup(info)
 		return "", fmt.Errorf("failed to unrestrict link: %w", err)
 	}
 

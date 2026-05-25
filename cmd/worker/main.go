@@ -73,17 +73,6 @@ func main() {
 	// Provider settings
 	cfg.UseRealDebrid = appSettings.UseRealDebrid
 	cfg.UsePremiumize = appSettings.UsePremiumize
-	if len(appSettings.StremioAddons) > 0 {
-		// Convert settings.StremioAddon to config.StremioAddon
-		cfg.StremioAddons = make([]config.StremioAddon, len(appSettings.StremioAddons))
-		for i, addon := range appSettings.StremioAddons {
-			cfg.StremioAddons[i] = config.StremioAddon{
-				Name:    addon.Name,
-				URL:     addon.URL,
-				Enabled: addon.Enabled,
-			}
-		}
-	}
 
 	// Playlist settings
 	if appSettings.TotalPages > 0 {
@@ -107,16 +96,8 @@ func main() {
 	// Initialize components
 	tmdbClient := services.NewTMDBClient(cfg.TMDBAPIKey, cfg.FanartTVAPIKey)
 
-	// Initialize providers
-	// Convert config.StremioAddon to providers.StremioAddon
-	stremioAddons := make([]providers.StremioAddon, len(cfg.StremioAddons))
-	for i, addon := range cfg.StremioAddons {
-		stremioAddons[i] = providers.StremioAddon{
-			Name:    addon.Name,
-			URL:     addon.URL,
-			Enabled: addon.Enabled,
-		}
-	}
+	// Initialize provider shell. External stream providers are disabled; stream
+	// availability now comes from Real-Debrid library sync and imported cache.
 	// Get proxies from settings if available
 	proxies := settingsManager.Get().HTTPProxies
 	if !settingsManager.Get().UseHTTPProxy {
@@ -124,14 +105,10 @@ func main() {
 	}
 	multiProvider := providers.NewMultiProvider(
 		cfg.RealDebridAPIKey,
-		stremioAddons,
+		nil,
 		tmdbClient,
 		proxies,
 	)
-	currentSettings := settingsManager.Get()
-	if currentSettings.DMMProviderEnabled {
-		multiProvider.EnableDMMDirect(cfg.RealDebridAPIKey, currentSettings.DMMProviderURL)
-	}
 
 	// Initialize cache manager
 	cacheManager := cache.NewManager(db)

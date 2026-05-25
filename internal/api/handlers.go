@@ -83,19 +83,6 @@ type Handler struct {
 	runtimeConfig    *config.Config
 }
 
-func toProviderAddons(addons []settings.StremioAddon) []providers.StremioAddon {
-	providerAddons := make([]providers.StremioAddon, len(addons))
-	for i, addon := range addons {
-		providerAddons[i] = providers.StremioAddon{
-			Name:    addon.Name,
-			URL:     addon.URL,
-			Enabled: addon.Enabled,
-		}
-	}
-
-	return providerAddons
-}
-
 func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 	h.tmdbClient = services.NewTMDBClient(cfg.TMDBAPIKey, cfg.FanartTVAPIKey)
 	h.rdClient = services.NewRealDebridClient(cfg.RealDebridAPIKey)
@@ -106,7 +93,7 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 	}
 
 	runtimeAddons := providers.BuildRuntimeAddons(
-		toProviderAddons(cfg.StremioAddons),
+		nil,
 		cfg.UseRealDebrid,
 		cfg.RealDebridAPIKey,
 		cfg.CometEnabled,
@@ -119,9 +106,6 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 		h.tmdbClient,
 		proxies,
 	)
-	if cfg.DMMProviderEnabled {
-		h.streamProvider.EnableDMMDirect(cfg.RealDebridAPIKey, cfg.DMMProviderURL)
-	}
 
 	if h.streamProvider != nil && h.settingsManager != nil {
 		h.streamProvider.SetSortSettings(
@@ -3216,6 +3200,17 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 				newSettings.TraktClientSecret = oldSettings.TraktClientSecret
 			}
 		}
+
+		// Provider addons, DMM direct provider lookup, and the built-in Stremio
+		// addon are retired from the active server surface. Keep accepting old
+		// settings payloads, but persist them disabled so playback stays on the
+		// Real-Debrid library and imported stream-cache path.
+		newSettings.StremioAddons = nil
+		newSettings.DMMProviderEnabled = false
+		newSettings.StremioAddon.Enabled = false
+		newSettings.StremioAddon.SharedToken = ""
+		newSettings.StremioAddon.PublicServerURL = ""
+		newSettings.StremioAddon.Catalogs = nil
 
 		if err := h.settingsManager.Update(&newSettings); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to update settings")
