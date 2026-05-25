@@ -895,12 +895,12 @@ func main() {
 
 				nextDelay := interval
 				current := settingsManager.Get()
-				if current != nil && current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid {
+				if current != nil && current.UseRealDebrid {
 					services.GlobalScheduler.MarkRunning(services.ServiceRDLibrarySync)
 					err := cacheScanner.SyncPendingRealDebridLibraryAddsNow(workerCtx)
 					if retryDelay := api.RealDebridLibrarySyncRetryDelay(err); retryDelay > 0 {
 						nextDelay = retryDelay
-						services.GlobalScheduler.MarkCompleteWithDelay(services.ServiceRDLibrarySync, err, interval, retryDelay)
+						services.GlobalScheduler.MarkCompleteWithDelay(services.ServiceRDLibrarySync, nil, interval, retryDelay)
 					} else {
 						services.GlobalScheduler.MarkComplete(services.ServiceRDLibrarySync, err, interval)
 					}

@@ -4580,7 +4580,7 @@ func (h *Handler) runService(serviceName string) {
 
 	if serviceName == services.ServiceRDLibrarySync {
 		if retryDelay := RealDebridLibrarySyncRetryDelay(err); retryDelay > 0 {
-			services.GlobalScheduler.MarkCompleteWithDelay(serviceName, err, interval, retryDelay)
+			services.GlobalScheduler.MarkCompleteWithDelay(serviceName, nil, interval, retryDelay)
 			return
 		}
 	}

@@ -806,6 +806,17 @@ func isRealDebridLibraryRateLimitError(err error) bool {
 		strings.Contains(errText, "rate limit")
 }
 
+func isRealDebridRejectedSourceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "status 451") ||
+		strings.Contains(errText, "infringing_file") ||
+		strings.Contains(errText, "copyright") ||
+		strings.Contains(errText, "unavailable for legal reasons")
+}
+
 func (cs *CacheScanner) setRealDebridLibrarySyncCooldown(delay time.Duration) time.Time {
 	if delay <= 0 {
 		delay = realDebridLibrarySyncDefaultCooldown
@@ -869,8 +880,8 @@ func (cs *CacheScanner) pendingRealDebridLibraryAdds(ctx context.Context, limit 
 
 func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Context, force bool) error {
 	const (
-		batchSize     = 25
-		perItemDelay  = 1500 * time.Millisecond
+		batchSize     = 10
+		perItemDelay  = 5 * time.Second
 		progressEvery = 10
 	)
 
@@ -906,6 +917,21 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 	}
 
 	totalSynced := 0
+	rdAttempts := 0
+	waitForRealDebridSlot := func() error {
+		if rdAttempts == 0 {
+			rdAttempts++
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(perItemDelay):
+			rdAttempts++
+			return nil
+		}
+	}
+
 	for {
 		pending, err := cs.pendingRealDebridLibraryAdds(ctx, batchSize)
 		if err != nil {
@@ -926,6 +952,7 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 		services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Syncing %d cached streams to Real-Debrid", len(pending)))
 
 		syncedThisBatch := 0
+		retiredThisBatch := 0
 		for _, item := range pending {
 			stream := item.stream
 			if stream == nil {
@@ -948,6 +975,8 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 				}
 				if markErr := markUnavailable(ctx, stream.ID, "retired cached stream with no valid torrent hash"); markErr != nil {
 					log.Printf("[CACHE-SCANNER] Failed to retire cached stream %s %d with invalid hash: %v", stream.MediaType, stream.MediaID, markErr)
+				} else {
+					retiredThisBatch++
 				}
 				continue
 			}
@@ -959,6 +988,9 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 			markUnavailable := cs.cacheStore.MarkUnavailableByCacheID
 			if item.option {
 				markUnavailable = cs.cacheStore.MarkStreamOptionUnavailableByID
+			}
+			if err := waitForRealDebridSlot(); err != nil {
+				return err
 			}
 			if err := cs.maybeAddCachedStreamToRealDebrid(
 				ctx,
@@ -983,7 +1015,18 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 					if markErr := markUnavailable(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
 						log.Printf("[CACHE-SCANNER] Failed to retire invalid magnet source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
 					} else {
+						retiredThisBatch++
 						log.Printf("[CACHE-SCANNER] Retired invalid magnet source %s %d after Real-Debrid rejected it", stream.MediaType, stream.MediaID)
+					}
+					continue
+				}
+				if isRealDebridRejectedSourceError(err) {
+					message := fmt.Sprintf("retired Real-Debrid rejected source: %v", err)
+					if markErr := markUnavailable(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
+						log.Printf("[CACHE-SCANNER] Failed to retire Real-Debrid rejected source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
+					} else {
+						retiredThisBatch++
+						log.Printf("[CACHE-SCANNER] Retired Real-Debrid rejected source %s %d", stream.MediaType, stream.MediaID)
 					}
 					continue
 				}
@@ -996,17 +1039,16 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 			if totalSynced%progressEvery == 0 {
 				log.Printf("[CACHE-SCANNER] Real-Debrid library sync progress: %d streams added", totalSynced)
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(perItemDelay):
-			}
 		}
 
-		if syncedThisBatch == 0 {
+		if syncedThisBatch == 0 && retiredThisBatch == 0 {
 			log.Printf("[CACHE-SCANNER] Real-Debrid library sync paused: no items from the current batch could be added")
 			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), "No items from the current batch could be added")
 			return nil
+		}
+		if syncedThisBatch == 0 {
+			log.Printf("[CACHE-SCANNER] Real-Debrid library sync retired %d rejected streams; continuing to next batch", retiredThisBatch)
+			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Retired %d rejected Real-Debrid streams", retiredThisBatch))
 		}
 	}
 }
