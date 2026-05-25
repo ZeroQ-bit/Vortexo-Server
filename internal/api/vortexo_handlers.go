@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +157,15 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 	var providerStreams []providers.TorrentioStream
 	if req.Type == "episode" {
 		providerStreams, err = h.streamProvider.GetSeriesStreams(imdbID, req.Season, req.Episode)
+		if err == nil {
+			providerStreams = filterVortexoEpisodeStreams(
+				providerStreams,
+				firstNonEmpty(req.ParentTitle, req.Title),
+				req.Season,
+				req.Episode,
+				releaseYear,
+			)
+		}
 	} else {
 		providerStreams, err = h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
 		if err == nil && req.Title != "" {
@@ -844,6 +855,30 @@ func filterVortexoMovieStreams(streams []providers.TorrentioStream, title string
 	return filtered
 }
 
+func filterVortexoEpisodeStreams(streams []providers.TorrentioStream, title string, season, episode, year int) []providers.TorrentioStream {
+	if len(streams) == 0 {
+		return streams
+	}
+
+	filtered := make([]providers.TorrentioStream, 0, len(streams))
+	for _, stream := range streams {
+		if vortexoStreamLooksAdult(stream) {
+			log.Printf("[Vortexo] Filtered adult-looking episode source for %q S%02dE%02d: %s", title, season, episode, firstNonEmpty(stream.Title, stream.Name))
+			continue
+		}
+		if !vortexoEpisodeStreamMatches(stream, title, season, episode, year) {
+			log.Printf("[Vortexo] Filtered episode mismatch for %q S%02dE%02d: %s", title, season, episode, firstNonEmpty(stream.Title, stream.Name))
+			continue
+		}
+		filtered = append(filtered, stream)
+	}
+
+	if len(filtered) != len(streams) {
+		log.Printf("[Vortexo] Episode source filter kept %d/%d streams for %q S%02dE%02d", len(filtered), len(streams), title, season, episode)
+	}
+	return filtered
+}
+
 func vortexoMovieStreamMatchesTitle(stream providers.TorrentioStream, title string, year int) bool {
 	requested := normalizeVortexoLookupTitle(title)
 	if requested == "" {
@@ -883,6 +918,124 @@ func vortexoMovieStreamMatchesTitle(stream providers.TorrentioStream, title stri
 	}
 
 	return false
+}
+
+func vortexoEpisodeStreamMatches(stream providers.TorrentioStream, title string, season, episode, year int) bool {
+	requested := normalizeVortexoLookupTitle(title)
+	candidate := normalizeVortexoLookupTitle(vortexoStreamTitleText(stream))
+	if candidate == "" {
+		return false
+	}
+	if requested != "" && !vortexoCandidateTitleMatches(candidate, requested, year) {
+		return false
+	}
+
+	rawText := vortexoStreamTitleText(stream)
+	if parsedSeason, parsedEpisode, ok := parseVortexoEpisodeReference(rawText); ok {
+		return parsedSeason == season && parsedEpisode == episode
+	}
+	if parsedSeason, ok := parseVortexoSeasonReference(rawText); ok {
+		return parsedSeason == season
+	}
+
+	return season <= 0 || episode <= 0
+}
+
+func vortexoStreamTitleText(stream providers.TorrentioStream) string {
+	return strings.Join([]string{
+		stream.Title,
+		stream.Name,
+		stream.BehaviorHints.Filename,
+	}, " ")
+}
+
+func vortexoCandidateTitleMatches(candidate, requested string, year int) bool {
+	if requested == "" {
+		return true
+	}
+	if candidate == requested || strings.HasPrefix(candidate, requested+" ") {
+		return true
+	}
+	if year > 0 {
+		for _, acceptedYear := range vortexoAcceptedMovieYears(year) {
+			if strings.HasPrefix(candidate, fmt.Sprintf("%s %d ", requested, acceptedYear)) {
+				return true
+			}
+		}
+	}
+
+	requestedTokens := strings.Fields(requested)
+	candidateTokens := strings.Fields(candidate)
+	if len(requestedTokens) == 0 || len(candidateTokens) < len(requestedTokens) {
+		return false
+	}
+
+	allRequestedTokensAreLetters := true
+	var acronym strings.Builder
+	for _, token := range requestedTokens {
+		if len(token) != 1 {
+			allRequestedTokensAreLetters = false
+			break
+		}
+		acronym.WriteString(token)
+	}
+	if allRequestedTokensAreLetters && acronym.Len() > 1 {
+		for index, token := range requestedTokens {
+			if candidateTokens[index] != token {
+				return false
+			}
+		}
+		return true
+	}
+
+	if len(requestedTokens) == 1 && len(requestedTokens[0]) <= 4 {
+		for index, char := range requestedTokens[0] {
+			if index >= len(candidateTokens) || candidateTokens[index] != string(char) {
+				return false
+			}
+		}
+		return true
+	}
+
+	return false
+}
+
+func parseVortexoEpisodeReference(text string) (int, int, bool) {
+	patterns := []string{
+		`(?i)(?:^|[^A-Z0-9])S0*([0-9]{1,3})[\s._-]*E0*([0-9]{1,3})(?:[^0-9]|$)`,
+		`(?i)(?:^|[^A-Z0-9])0*([0-9]{1,3})x0*([0-9]{1,3})(?:[^0-9]|$)`,
+		`(?i)(?:^|[^A-Z0-9])season[\s._-]*0*([0-9]{1,3}).{0,40}episode[\s._-]*0*([0-9]{1,3})(?:[^0-9]|$)`,
+	}
+	for _, pattern := range patterns {
+		matches := regexp.MustCompile(pattern).FindStringSubmatch(text)
+		if len(matches) < 3 {
+			continue
+		}
+		season, seasonErr := strconv.Atoi(matches[1])
+		episode, episodeErr := strconv.Atoi(matches[2])
+		if seasonErr == nil && episodeErr == nil && season > 0 && episode > 0 {
+			return season, episode, true
+		}
+	}
+	return 0, 0, false
+}
+
+func parseVortexoSeasonReference(text string) (int, bool) {
+	patterns := []string{
+		`(?i)(?:^|[^A-Z0-9])S0*([0-9]{1,3})(?:[^0-9]|$)`,
+		`(?i)(?:^|[^A-Z0-9])season[\s._-]*0*([0-9]{1,3})(?:[^0-9]|$)`,
+	}
+	for _, pattern := range patterns {
+		matches := regexp.MustCompile(pattern).FindStringSubmatch(text)
+		if len(matches) < 2 {
+			continue
+		}
+		season, err := strconv.Atoi(matches[1])
+		if err == nil && season > 0 {
+			return season, true
+		}
+	}
+	return 0, false
 }
 
 func vortexoAcceptedMovieYears(year int) []int {

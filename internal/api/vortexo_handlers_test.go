@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +178,27 @@ func TestFilterVortexoMovieStreamsRejectsAdultAndLooseTitleMatches(t *testing.T)
 	}
 	if filtered[0].Title != streams[0].Title {
 		t.Fatalf("filterVortexoMovieStreams kept %q, want %q", filtered[0].Title, streams[0].Title)
+	}
+}
+
+func TestFilterVortexoEpisodeStreamsRejectsLooseMiamiSportsMatch(t *testing.T) {
+	streams := []providers.TorrentioStream{
+		{Title: "M.I.A. S01E01 2160p WEB-DL DD+ 5.1 H.265-GRACE", Name: "M.I.A.", Source: "DMM"},
+		{Title: "F1.2026.R04.Miami.Grand.Prix.SkyUHD.2160P", Name: "Formula 1", Source: "DMM"},
+		{Title: "M I A S01E01 Revenge 2160p PCOK WEB-DL DDP5 1 Atmos H 265-Kitsune", Name: "M I A", Source: "DMM"},
+		{Title: "Neon.Genesis.Evangelion.S01.1080p.BluRay.Remux.Dual-Audio.FLAC5.1.H.264", Name: "Neon Genesis Evangelion", Source: "DMM"},
+		{Title: "M.I.A.S01.1080p", Name: "M.I.A.", Source: "DMM"},
+	}
+
+	filtered := filterVortexoEpisodeStreams(streams, "M.I.A.", 1, 1, 2026)
+	if len(filtered) != 3 {
+		t.Fatalf("filterVortexoEpisodeStreams kept %d streams, want 3: %#v", len(filtered), filtered)
+	}
+
+	for _, stream := range filtered {
+		if strings.Contains(stream.Title, "Miami") || strings.Contains(stream.Title, "Evangelion") {
+			t.Fatalf("kept unrelated stream: %q", stream.Title)
+		}
 	}
 }
 
