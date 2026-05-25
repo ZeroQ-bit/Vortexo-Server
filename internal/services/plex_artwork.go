@@ -106,7 +106,10 @@ func (s *PlexArtworkService) SyncLibrary(ctx context.Context, opts PlexArtworkSy
 				stats.Stopped = stopErr.Error()
 				stats.CompletedAt = time.Now().UTC()
 				log.Printf("[PlexArtwork] stop %d/%d %s: %v", index+1, len(items), label, err)
-				return stats, err
+				if opts.Progress != nil {
+					opts.Progress(index+1, len(items), "Plex artwork sync paused: public Plex page blocked the fetch")
+				}
+				return stats, nil
 			}
 
 			stats.Failed++
@@ -160,7 +163,13 @@ func (s *PlexArtworkService) RefreshOne(ctx context.Context, item models.PlexArt
 
 	entry, err := s.scrapeItem(ctx, item, delay)
 	if err != nil {
-		return nil, err
+		var stopErr *plexArtworkStopError
+		if errors.As(err, &stopErr) {
+			log.Printf("[PlexArtwork] refresh paused for %s:%d %s: %v", item.MediaType, item.TMDBID, item.Title, err)
+			entry = nil
+		} else {
+			return nil, err
+		}
 	}
 	if entry == nil {
 		entry = &models.PlexArtworkEntry{
@@ -172,7 +181,12 @@ func (s *PlexArtworkService) RefreshOne(ctx context.Context, item models.PlexArt
 			UpdatedAt: time.Now().UTC(),
 			Artwork:   models.PlexArtwork{},
 		}
-		if err := s.store.Upsert(ctx, entry, "miss", "no public Plex artwork found"); err != nil {
+		missReason := "no public Plex artwork found"
+		var stopErr *plexArtworkStopError
+		if errors.As(err, &stopErr) {
+			missReason = stopErr.Error()
+		}
+		if err := s.store.Upsert(ctx, entry, "miss", missReason); err != nil {
 			return nil, err
 		}
 		return entry, nil

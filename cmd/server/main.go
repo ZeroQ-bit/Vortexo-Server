@@ -893,17 +893,27 @@ func main() {
 				case <-timer.C:
 				}
 
+				nextDelay := interval
 				current := settingsManager.Get()
 				if current != nil && current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid {
 					services.GlobalScheduler.MarkRunning(services.ServiceRDLibrarySync)
 					err := cacheScanner.SyncPendingRealDebridLibraryAddsNow(workerCtx)
-					services.GlobalScheduler.MarkComplete(services.ServiceRDLibrarySync, err, interval)
+					if retryDelay := api.RealDebridLibrarySyncRetryDelay(err); retryDelay > 0 {
+						nextDelay = retryDelay
+						services.GlobalScheduler.MarkCompleteWithDelay(services.ServiceRDLibrarySync, err, interval, retryDelay)
+					} else {
+						services.GlobalScheduler.MarkComplete(services.ServiceRDLibrarySync, err, interval)
+					}
 					if err != nil {
-						log.Printf("❌ RD Library Sync error: %v", err)
+						if retryDelay := api.RealDebridLibrarySyncRetryDelay(err); retryDelay > 0 {
+							log.Printf("⏳ RD Library Sync paused: %v", err)
+						} else {
+							log.Printf("❌ RD Library Sync error: %v", err)
+						}
 					}
 				}
 
-				timer.Reset(interval)
+				timer.Reset(nextDelay)
 			}
 		}()
 	}

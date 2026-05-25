@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -30,10 +31,45 @@ type CacheScanner struct {
 	providerMu      sync.RWMutex
 	rdSyncMu        sync.Mutex
 	rdSyncActive    bool
+	rdSyncCooldown  time.Time
 	debridService   debrid.DebridService
 	settingsManager *settings.Manager
 	ticker          *time.Ticker
 	stopChan        chan bool
+}
+
+const (
+	realDebridLibrarySyncDefaultCooldown = 30 * time.Minute
+	realDebridLibrarySyncMinCooldown     = 5 * time.Minute
+	realDebridLibrarySyncMaxCooldown     = 2 * time.Hour
+)
+
+// RealDebridLibrarySyncRateLimitError tells scheduler callers to back off the
+// RD library sync worker without losing the normal service interval.
+type RealDebridLibrarySyncRateLimitError struct {
+	RetryAfter time.Duration
+	RetryAt    time.Time
+}
+
+func (e *RealDebridLibrarySyncRateLimitError) Error() string {
+	if e == nil {
+		return "Real-Debrid library sync paused by rate limit"
+	}
+	if !e.RetryAt.IsZero() {
+		return fmt.Sprintf("Real-Debrid library sync paused by rate limit; retry after %s", e.RetryAt.Local().Format("15:04:05"))
+	}
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("Real-Debrid library sync paused by rate limit; retry in %s", e.RetryAfter.Round(time.Second))
+	}
+	return "Real-Debrid library sync paused by rate limit"
+}
+
+func RealDebridLibrarySyncRetryDelay(err error) time.Duration {
+	var rateErr *RealDebridLibrarySyncRateLimitError
+	if errors.As(err, &rateErr) && rateErr.RetryAfter > 0 {
+		return rateErr.RetryAfter
+	}
+	return 0
 }
 
 func (cs *CacheScanner) SetProvider(provider *providers.MultiProvider) {
@@ -741,6 +777,53 @@ func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, la
 	return nil
 }
 
+func realDebridLibrarySyncRateLimitDelay(err error) time.Duration {
+	delay := debrid.RateLimitRetryAfter(err)
+	if delay <= 0 {
+		delay = realDebridLibrarySyncDefaultCooldown
+	}
+	if delay < realDebridLibrarySyncMinCooldown {
+		delay = realDebridLibrarySyncMinCooldown
+	}
+	if delay > realDebridLibrarySyncMaxCooldown {
+		delay = realDebridLibrarySyncMaxCooldown
+	}
+	return delay
+}
+
+func isRealDebridLibraryRateLimitError(err error) bool {
+	if debrid.IsRateLimitError(err) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.Contains(errText, "too_many_requests") ||
+		strings.Contains(errText, "error_code\": 34") ||
+		strings.Contains(errText, "status 429") ||
+		strings.Contains(errText, "rate limited") ||
+		strings.Contains(errText, "rate limit")
+}
+
+func (cs *CacheScanner) setRealDebridLibrarySyncCooldown(delay time.Duration) time.Time {
+	if delay <= 0 {
+		delay = realDebridLibrarySyncDefaultCooldown
+	}
+	retryAt := time.Now().Add(delay)
+	cs.rdSyncMu.Lock()
+	cs.rdSyncCooldown = retryAt
+	cs.rdSyncMu.Unlock()
+	return retryAt
+}
+
+func realDebridLibraryRateLimitMessage(retryAt time.Time) string {
+	if retryAt.IsZero() {
+		return "Paused by Real-Debrid rate limit"
+	}
+	return fmt.Sprintf("Paused by Real-Debrid rate limit; retry after %s", retryAt.Local().Format("15:04:05"))
+}
+
 func (cs *CacheScanner) syncPendingRealDebridLibraryAdds(ctx context.Context) error {
 	return cs.syncPendingRealDebridLibraryAddsWithMode(ctx, false)
 }
@@ -785,13 +868,30 @@ func (cs *CacheScanner) pendingRealDebridLibraryAdds(ctx context.Context, limit 
 }
 
 func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Context, force bool) error {
-	const batchSize = 100
+	const (
+		batchSize     = 25
+		perItemDelay  = 1500 * time.Millisecond
+		progressEvery = 10
+	)
 
 	cs.rdSyncMu.Lock()
 	if cs.rdSyncActive {
 		cs.rdSyncMu.Unlock()
 		log.Printf("[CACHE-SCANNER] Real-Debrid library sync already running, skipping duplicate request")
 		return nil
+	}
+	now := time.Now()
+	if !cs.rdSyncCooldown.IsZero() {
+		if delay := time.Until(cs.rdSyncCooldown); delay > 0 {
+			retryAt := cs.rdSyncCooldown
+			cs.rdSyncMu.Unlock()
+			message := realDebridLibraryRateLimitMessage(retryAt)
+			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, 0, 0, message)
+			return &RealDebridLibrarySyncRateLimitError{RetryAfter: delay, RetryAt: retryAt}
+		}
+		if now.After(cs.rdSyncCooldown) {
+			cs.rdSyncCooldown = time.Time{}
+		}
 	}
 	cs.rdSyncActive = true
 	cs.rdSyncMu.Unlock()
@@ -871,12 +971,12 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 				force,
 			); err != nil {
 				log.Printf("[CACHE-SCANNER] Failed to sync cached stream %s %d to Real-Debrid: %v", stream.MediaType, stream.MediaID, err)
-				errText := strings.ToLower(err.Error())
-				if strings.Contains(errText, "too_many_requests") || strings.Contains(errText, "error_code\": 34") || strings.Contains(errText, "rate") {
+				if isRealDebridLibraryRateLimitError(err) {
+					delay := realDebridLibrarySyncRateLimitDelay(err)
+					retryAt := cs.setRealDebridLibrarySyncCooldown(delay)
 					log.Printf("[CACHE-SCANNER] Real-Debrid rate limit reached, pausing library sync so we can resume cleanly later")
-					services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), "Paused by Real-Debrid rate limit")
-					time.Sleep(5 * time.Second)
-					return nil
+					services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), realDebridLibraryRateLimitMessage(retryAt))
+					return &RealDebridLibrarySyncRateLimitError{RetryAfter: delay, RetryAt: retryAt}
 				}
 				if isRealDebridInvalidMagnetError(err) {
 					message := fmt.Sprintf("retired invalid magnet source: %v", err)
@@ -893,10 +993,14 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 			totalSynced++
 			syncedThisBatch++
 			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending)-syncedThisBatch, fmt.Sprintf("Added %s to Real-Debrid", label))
-			if totalSynced%50 == 0 {
+			if totalSynced%progressEvery == 0 {
 				log.Printf("[CACHE-SCANNER] Real-Debrid library sync progress: %d streams added", totalSynced)
 			}
-			time.Sleep(300 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(perItemDelay):
+			}
 		}
 
 		if syncedThisBatch == 0 {

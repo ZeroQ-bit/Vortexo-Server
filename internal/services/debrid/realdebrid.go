@@ -3,6 +3,7 @@ package debrid
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,89 @@ import (
 const (
 	realDebridBaseURL = "https://api.real-debrid.com/rest/1.0"
 )
+
+// RateLimitError preserves Real-Debrid backoff hints so callers can pause
+// background jobs instead of retrying into the same limit.
+type RateLimitError struct {
+	Operation  string
+	StatusCode int
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *RateLimitError) Error() string {
+	if e == nil {
+		return "Real-Debrid rate limit"
+	}
+	message := "Real-Debrid rate limit"
+	if e.Operation != "" {
+		message += " during " + e.Operation
+	}
+	if e.RetryAfter > 0 {
+		message += fmt.Sprintf("; retry after %s", e.RetryAfter.Round(time.Second))
+	}
+	if e.Body != "" {
+		message += ": " + e.Body
+	}
+	return message
+}
+
+func IsRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var rateErr *RateLimitError
+	if errors.As(err, &rateErr) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "too_many_requests") ||
+		strings.Contains(msg, "error_code\": 34") ||
+		strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "rate limited") ||
+		strings.Contains(msg, "rate limit")
+}
+
+func RateLimitRetryAfter(err error) time.Duration {
+	var rateErr *RateLimitError
+	if errors.As(err, &rateErr) && rateErr.RetryAfter > 0 {
+		return rateErr.RetryAfter
+	}
+	return 0
+}
+
+func realDebridRateLimitError(operation string, resp *http.Response, body []byte) *RateLimitError {
+	var retryAfter time.Duration
+	if resp != nil {
+		retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+	}
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	return &RateLimitError{
+		Operation:  operation,
+		StatusCode: statusCode,
+		RetryAfter: retryAfter,
+		Body:       strings.TrimSpace(string(body)),
+	}
+}
+
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(retryAt); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
 
 // RealDebrid implements DebridService for Real-Debrid
 type RealDebrid struct {
@@ -75,6 +159,9 @@ func (rd *RealDebrid) CheckCache(ctx context.Context, hashes []string) (map[stri
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, realDebridRateLimitError("check cache", resp, body)
+		}
 		return nil, fmt.Errorf("real-debrid API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -127,6 +214,9 @@ func (rd *RealDebrid) GetStreamURL(ctx context.Context, hash string, fileIndex i
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return "", realDebridRateLimitError("add magnet", resp, body)
+		}
 		return "", fmt.Errorf("add magnet failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -256,6 +346,9 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return "", realDebridRateLimitError("add magnet", resp, body)
+		}
 		return "", fmt.Errorf("add magnet failed (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -268,7 +361,9 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 
 	info, err := rd.waitForTorrentSelectionInfo(ctx, addResult.ID)
 	if err != nil {
-		_ = rd.deleteTorrent(ctx, addResult.ID)
+		if !IsRateLimitError(err) {
+			_ = rd.deleteTorrent(ctx, addResult.ID)
+		}
 		return "", err
 	}
 	if strings.EqualFold(strings.TrimSpace(info.Status), "downloaded") {
@@ -300,6 +395,9 @@ func (rd *RealDebrid) AddToLibrary(ctx context.Context, hash string, fileIndex i
 
 	if selectResp.StatusCode != http.StatusNoContent && selectResp.StatusCode != http.StatusCreated && selectResp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(selectResp.Body)
+		if selectResp.StatusCode == http.StatusTooManyRequests {
+			return "", realDebridRateLimitError("select files", selectResp, body)
+		}
 		_ = rd.deleteTorrent(ctx, addResult.ID)
 		return "", fmt.Errorf("select files failed (status %d): %s", selectResp.StatusCode, string(body))
 	}
@@ -327,6 +425,9 @@ func (rd *RealDebrid) deleteTorrent(ctx context.Context, torrentID string) error
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return realDebridRateLimitError("delete torrent", resp, body)
+		}
 		return fmt.Errorf("delete torrent failed (status %d): %s", resp.StatusCode, string(body))
 	}
 	return nil
@@ -349,6 +450,9 @@ func (rd *RealDebrid) getTorrentInfo(ctx context.Context, torrentID string) (*re
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, realDebridRateLimitError("get torrent info", resp, body)
+		}
 		return nil, fmt.Errorf("get torrent info failed (status %d): %s", resp.StatusCode, string(body))
 	}
 

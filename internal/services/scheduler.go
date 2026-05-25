@@ -65,13 +65,23 @@ func (s *ServiceScheduler) MarkRunning(name string) {
 
 // MarkComplete marks a service run as complete
 func (s *ServiceScheduler) MarkComplete(name string, err error, interval time.Duration) {
+	s.MarkCompleteWithDelay(name, err, interval, interval)
+}
+
+// MarkCompleteWithDelay marks a service run as complete and schedules the next
+// run after a custom delay while preserving the normal service interval label.
+func (s *ServiceScheduler) MarkCompleteWithDelay(name string, err error, interval, nextDelay time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if svc, exists := s.services[name]; exists {
+		if nextDelay <= 0 {
+			nextDelay = interval
+		}
+		now := time.Now()
 		svc.Running = false
-		svc.LastRun = time.Now()
-		svc.NextRun = time.Now().Add(interval)
+		svc.LastRun = now
+		svc.NextRun = now.Add(nextDelay)
 		svc.Interval = formatDuration(interval)
 		svc.RunCount++
 		svc.Progress = 0
