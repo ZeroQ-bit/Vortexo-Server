@@ -98,6 +98,20 @@ func TestBuildRDWebDAVRcloneMountArgsIncludesAllowOther(t *testing.T) {
 	}
 }
 
+func TestRDWebDAVMountEntryRejectsSharedBindMount(t *testing.T) {
+	fields := []string{"host/path", "/mnt/rd", "ext4", "rw,relatime"}
+	if isRDWebDAVRcloneMountEntry(fields) {
+		t.Fatal("expected ext4 bind mount to not count as a ready RD WebDAV rclone mount")
+	}
+}
+
+func TestRDWebDAVMountEntryAcceptsRcloneFuseMount(t *testing.T) {
+	fields := []string{"rdwebdav:", "/mnt/rd", "fuse.rclone", "rw,nosuid,nodev,relatime"}
+	if !isRDWebDAVRcloneMountEntry(fields) {
+		t.Fatal("expected rclone FUSE mount to count as ready")
+	}
+}
+
 func TestEpisodeSymlinkPathIncludesTMDBIDs(t *testing.T) {
 	series := &models.Series{TMDBID: 262388, Title: "M.I.A.", Year: 2026}
 	episode := &models.Episode{TMDBID: 6061110, Title: "Revenge"}

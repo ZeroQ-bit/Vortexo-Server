@@ -237,7 +237,7 @@ func (b *RDWebDAVLibraryBuilder) currentSettings() *isettings.Settings {
 }
 
 func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *isettings.Settings, mountPath string) error {
-	if isMountedPath(mountPath) {
+	if isRDWebDAVRcloneMountedPath(mountPath) {
 		return nil
 	}
 	if strings.TrimSpace(cfg.RDWebDAVUsername) == "" || strings.TrimSpace(cfg.RDWebDAVPassword) == "" {
@@ -256,7 +256,7 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.mountCmd != nil && b.mountCmd.Process != nil {
-		if isMountedPath(mountPath) {
+		if isRDWebDAVRcloneMountedPath(mountPath) {
 			return nil
 		}
 		return fmt.Errorf("rclone mount process is running but %s is not mounted yet", mountPath)
@@ -302,7 +302,7 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 
 	deadline := time.Now().Add(rdWebDAVMountTimeout)
 	for time.Now().Before(deadline) {
-		if isMountedPath(mountPath) {
+		if isRDWebDAVRcloneMountedPath(mountPath) {
 			log.Printf("[RD WebDAV] rclone mounted %s", mountPath)
 			return nil
 		}
@@ -888,7 +888,7 @@ func sameOrDescendant(path, root string) bool {
 	return err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
 }
 
-func isMountedPath(path string) bool {
+func isRDWebDAVRcloneMountedPath(path string) bool {
 	mounts, err := os.ReadFile("/proc/mounts")
 	if err != nil {
 		return false
@@ -901,11 +901,22 @@ func isMountedPath(path string) bool {
 		}
 		mountPoint := unescapeProcMountPath(fields[1])
 		mountPoint, _ = filepath.Abs(mountPoint)
-		if mountPoint == path {
+		if mountPoint == path && isRDWebDAVRcloneMountEntry(fields) {
 			return true
 		}
 	}
 	return false
+}
+
+func isRDWebDAVRcloneMountEntry(fields []string) bool {
+	if len(fields) < 3 {
+		return false
+	}
+	source := strings.ToLower(unescapeProcMountPath(fields[0]))
+	fsType := strings.ToLower(fields[2])
+	return strings.Contains(fsType, "fuse") ||
+		strings.Contains(source, "rclone") ||
+		strings.HasPrefix(source, strings.ToLower(rdWebDAVRemoteName)+":")
 }
 
 func unescapeProcMountPath(value string) string {
