@@ -275,16 +275,7 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		return fmt.Errorf("write rclone config: %w", err)
 	}
 
-	args := []string{
-		"--config", configPath,
-		"mount", rdWebDAVRemoteName + ":", mountPath,
-		"--read-only",
-		"--dir-cache-time", "30s",
-		"--poll-interval", "0",
-		"--vfs-cache-mode", "off",
-		"--umask", "002",
-		"--log-level", "INFO",
-	}
+	args := buildRDWebDAVRcloneMountArgs(configPath, mountPath)
 	cmd := exec.CommandContext(context.Background(), "rclone", args...)
 	var rcloneOutput synchronizedBuffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &rcloneOutput)
@@ -327,6 +318,20 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("rclone mount did not become ready at %s after %s; recent output: %s", mountPath, rdWebDAVMountTimeout, compactRcloneOutput(rcloneOutput.String()))
+}
+
+func buildRDWebDAVRcloneMountArgs(configPath, mountPath string) []string {
+	return []string{
+		"--config", configPath,
+		"mount", rdWebDAVRemoteName + ":", mountPath,
+		"--read-only",
+		"--allow-other",
+		"--dir-cache-time", "30s",
+		"--poll-interval", "0",
+		"--vfs-cache-mode", "off",
+		"--umask", "002",
+		"--log-level", "INFO",
+	}
 }
 
 func obscureRclonePassword(ctx context.Context, password string) (string, error) {

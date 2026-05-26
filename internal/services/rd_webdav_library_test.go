@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
@@ -87,6 +88,13 @@ func TestEnsureSymlinkCreatesAndUpdates(t *testing.T) {
 	}
 	if target != second {
 		t.Fatalf("expected second target, got %q", target)
+	}
+}
+
+func TestBuildRDWebDAVRcloneMountArgsIncludesAllowOther(t *testing.T) {
+	args := buildRDWebDAVRcloneMountArgs("/app/cache/rclone.conf", "/mnt/rd")
+	if !slices.Contains(args, "--allow-other") {
+		t.Fatalf("expected rclone mount args to include --allow-other, got %v", args)
 	}
 }
 
