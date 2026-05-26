@@ -115,13 +115,45 @@ func TestRDWebDAVMountEntryAcceptsRcloneFuseMount(t *testing.T) {
 	}
 }
 
-func TestEpisodeSymlinkPathIncludesTMDBIDs(t *testing.T) {
-	series := &models.Series{TMDBID: 262388, Title: "M.I.A.", Year: 2026}
+func TestEpisodeSymlinkPathPrefersTVDBShowID(t *testing.T) {
+	series := &models.Series{
+		TMDBID:   262388,
+		Title:    "M.I.A.",
+		Year:     2026,
+		Metadata: models.Metadata{"tvdb_id": 123456},
+	}
 	episode := &models.Episode{TMDBID: 6061110, Title: "Revenge"}
 	candidate := rdWebDAVMediaCandidate{Season: 1, Episode: 1, Ext: ".mkv"}
 
 	path := episodeSymlinkPath("/app/rd-library", series, episode, candidate)
-	if filepath.Base(path) != "M.I.A - S01E01 - Revenge {tmdb-6061110}.mkv" {
+	if filepath.Base(filepath.Dir(filepath.Dir(path))) != "M.I.A (2026) {tvdb-123456}" {
+		t.Fatalf("unexpected series symlink folder: %s", filepath.Base(filepath.Dir(filepath.Dir(path))))
+	}
+	if filepath.Base(path) != "M.I.A - S01E01 - Revenge.mkv" {
 		t.Fatalf("unexpected episode symlink filename: %s", filepath.Base(path))
+	}
+}
+
+func TestRemoveSupersededRDWebDAVSymlinkKeepsCurrentPath(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "source.mkv")
+	oldLink := filepath.Join(dir, "old.mkv")
+	currentLink := filepath.Join(dir, "current.mkv")
+	if err := os.WriteFile(target, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, oldLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, currentLink); err != nil {
+		t.Fatal(err)
+	}
+
+	removeSupersededRDWebDAVSymlink(models.Metadata{"rd_webdav_symlink_path": oldLink}, currentLink)
+	if _, err := os.Lstat(oldLink); !os.IsNotExist(err) {
+		t.Fatalf("expected old symlink removed, err=%v", err)
+	}
+	if _, err := os.Lstat(currentLink); err != nil {
+		t.Fatalf("expected current symlink kept: %v", err)
 	}
 }

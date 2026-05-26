@@ -488,6 +488,7 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVMovie(ctx context.Context, cfg *ise
 	added := false
 	existing, err := b.movieStore.GetByTMDBID(ctx, movie.TMDBID)
 	if err == nil && existing != nil {
+		removeSupersededRDWebDAVSymlink(existing.Metadata, linkPath)
 		movie = existing
 	} else {
 		movie.Monitored = true
@@ -563,6 +564,7 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *i
 	episodeUpdated := false
 	existingEpisode, err := b.episodeStore.GetBySeriesAndNumber(ctx, series.ID, candidate.Season, candidate.Episode)
 	if err == nil && existingEpisode != nil {
+		removeSupersededRDWebDAVSymlink(existingEpisode.Metadata, linkPath)
 		episode.ID = existingEpisode.ID
 		episode.CreatedAt = existingEpisode.CreatedAt
 		if episode.Title == "" {
@@ -691,21 +693,39 @@ func movieSymlinkPath(libraryPath string, movie *models.Movie, candidate rdWebDA
 func episodeSymlinkPath(libraryPath string, series *models.Series, episode *models.Episode, candidate rdWebDAVMediaCandidate) string {
 	year := SeriesReleaseYear(series)
 	seriesFolder := safePathComponent(series.Title)
+	idTag := seriesPlexIDTag(series)
 	if year > 0 {
-		seriesFolder = fmt.Sprintf("%s (%d) {tmdb-%d}", seriesFolder, year, series.TMDBID)
-	} else {
-		seriesFolder = fmt.Sprintf("%s {tmdb-%d}", seriesFolder, series.TMDBID)
+		seriesFolder = fmt.Sprintf("%s (%d)", seriesFolder, year)
+	}
+	if idTag != "" {
+		seriesFolder = strings.TrimSpace(seriesFolder + " " + idTag)
 	}
 	episodeTitle := safePathComponent(episode.Title)
 	if episodeTitle == "" {
 		episodeTitle = fmt.Sprintf("Episode %d", candidate.Episode)
 	}
 	file := fmt.Sprintf("%s - S%02dE%02d - %s", safePathComponent(series.Title), candidate.Season, candidate.Episode, episodeTitle)
-	if episode.TMDBID > 0 {
-		file += fmt.Sprintf(" {tmdb-%d}", episode.TMDBID)
-	}
 	file += candidate.Ext
 	return filepath.Join(libraryPath, "TV", seriesFolder, fmt.Sprintf("Season %02d", candidate.Season), file)
+}
+
+func seriesPlexIDTag(series *models.Series) string {
+	if series == nil {
+		return ""
+	}
+	if tvdbID := contentMetadataInt(series.Metadata, "tvdb_id"); tvdbID > 0 {
+		return fmt.Sprintf("{tvdb-%d}", tvdbID)
+	}
+	if imdbID := strings.TrimSpace(series.IMDBID); imdbID != "" {
+		return fmt.Sprintf("{imdb-%s}", imdbID)
+	}
+	if imdbID, ok := series.Metadata["imdb_id"].(string); ok && strings.TrimSpace(imdbID) != "" {
+		return fmt.Sprintf("{imdb-%s}", strings.TrimSpace(imdbID))
+	}
+	if series.TMDBID > 0 {
+		return fmt.Sprintf("{tmdb-%d}", series.TMDBID)
+	}
+	return ""
 }
 
 func ensureSymlink(sourcePath, linkPath string) (string, error) {
@@ -736,6 +756,35 @@ func ensureSymlink(sourcePath, linkPath string) (string, error) {
 		return "", err
 	}
 	return "created", nil
+}
+
+func removeSupersededRDWebDAVSymlink(metadata models.Metadata, newPath string) {
+	oldPath := strings.TrimSpace(rdWebDAVMetadataString(metadata, "rd_webdav_symlink_path"))
+	newPath = strings.TrimSpace(newPath)
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		return
+	}
+	info, err := os.Lstat(oldPath)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	if err := os.Remove(oldPath); err != nil {
+		log.Printf("[RD WebDAV] Could not remove superseded symlink %s: %v", oldPath, err)
+	}
+}
+
+func rdWebDAVMetadataString(metadata models.Metadata, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	switch value := metadata[key].(type) {
+	case string:
+		return value
+	case fmt.Stringer:
+		return value.String()
+	default:
+		return ""
+	}
 }
 
 func pruneDeadSymlinks(root string) (int, error) {
