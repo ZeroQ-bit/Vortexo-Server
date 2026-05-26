@@ -96,6 +96,9 @@ func TestBuildRDWebDAVRcloneMountArgsIncludesAllowOther(t *testing.T) {
 	if !slices.Contains(args, "--allow-other") {
 		t.Fatalf("expected rclone mount args to include --allow-other, got %v", args)
 	}
+	if !slices.Contains(args, "--allow-non-empty") {
+		t.Fatalf("expected rclone mount args to include --allow-non-empty, got %v", args)
+	}
 }
 
 func TestRDWebDAVMountEntryRejectsSharedBindMount(t *testing.T) {

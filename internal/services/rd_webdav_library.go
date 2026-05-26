@@ -326,6 +326,7 @@ func buildRDWebDAVRcloneMountArgs(configPath, mountPath string) []string {
 		"mount", rdWebDAVRemoteName + ":", mountPath,
 		"--read-only",
 		"--allow-other",
+		"--allow-non-empty",
 		"--dir-cache-time", "30s",
 		"--poll-interval", "0",
 		"--vfs-cache-mode", "off",
