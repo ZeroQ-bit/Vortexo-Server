@@ -157,3 +157,47 @@ func TestRemoveSupersededRDWebDAVSymlinkKeepsCurrentPath(t *testing.T) {
 		t.Fatalf("expected current symlink kept: %v", err)
 	}
 }
+
+func TestRemoveLegacyTMDBSeriesFolderRemovesGeneratedSymlinkTree(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "source.mkv")
+	if err := os.WriteFile(target, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyLink := filepath.Join(dir, "TV", "The Sopranos (1999) {tmdb-1398}", "Season 01", "The Sopranos - S01E01 - The Sopranos.mkv")
+	if err := os.MkdirAll(filepath.Dir(legacyLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, legacyLink); err != nil {
+		t.Fatal(err)
+	}
+	series := &models.Series{
+		TMDBID:   1398,
+		Title:    "The Sopranos",
+		Year:     1999,
+		Metadata: models.Metadata{"tvdb_id": 75299},
+	}
+
+	removeLegacyTMDBSeriesFolder(dir, series, filepath.Join(dir, "TV", "The Sopranos (1999) {tvdb-75299}"))
+	if _, err := os.Lstat(filepath.Join(dir, "TV", "The Sopranos (1999) {tmdb-1398}")); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy folder removed, err=%v", err)
+	}
+}
+
+func TestRemoveGeneratedSymlinkTreeKeepsRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	regularFile := filepath.Join(dir, "TV", "Show (2026) {tmdb-1}", "Season 01", "episode.mkv")
+	if err := os.MkdirAll(filepath.Dir(regularFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(regularFile, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if removeGeneratedSymlinkTree(filepath.Join(dir, "TV", "Show (2026) {tmdb-1}")) {
+		t.Fatal("expected regular-file tree to be kept")
+	}
+	if _, err := os.Lstat(regularFile); err != nil {
+		t.Fatalf("expected regular file kept: %v", err)
+	}
+}

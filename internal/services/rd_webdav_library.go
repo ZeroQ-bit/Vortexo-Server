@@ -560,6 +560,7 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *i
 	if err != nil {
 		return seriesAdded, false, "", err
 	}
+	removeLegacyTMDBSeriesFolder(libraryPath, series, filepath.Dir(filepath.Dir(linkPath)))
 
 	episodeUpdated := false
 	existingEpisode, err := b.episodeStore.GetBySeriesAndNumber(ctx, series.ID, candidate.Season, candidate.Episode)
@@ -771,6 +772,54 @@ func removeSupersededRDWebDAVSymlink(metadata models.Metadata, newPath string) {
 	if err := os.Remove(oldPath); err != nil {
 		log.Printf("[RD WebDAV] Could not remove superseded symlink %s: %v", oldPath, err)
 	}
+}
+
+func removeLegacyTMDBSeriesFolder(libraryPath string, series *models.Series, currentSeriesFolder string) {
+	if series == nil || series.TMDBID <= 0 || contentMetadataInt(series.Metadata, "tvdb_id") <= 0 {
+		return
+	}
+	year := SeriesReleaseYear(series)
+	legacyFolder := safePathComponent(series.Title)
+	if year > 0 {
+		legacyFolder = fmt.Sprintf("%s (%d)", legacyFolder, year)
+	}
+	legacyFolder = strings.TrimSpace(fmt.Sprintf("%s {tmdb-%d}", legacyFolder, series.TMDBID))
+	legacyPath := filepath.Join(libraryPath, "TV", legacyFolder)
+	if legacyPath == strings.TrimSpace(currentSeriesFolder) {
+		return
+	}
+	if removed := removeGeneratedSymlinkTree(legacyPath); removed {
+		log.Printf("[RD WebDAV] Removed legacy TMDB series folder %s", legacyPath)
+	}
+}
+
+func removeGeneratedSymlinkTree(root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	safeToRemove := true
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root || d.IsDir() {
+			return nil
+		}
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			safeToRemove = false
+		}
+		return nil
+	}); err != nil || !safeToRemove {
+		return false
+	}
+	if err := os.RemoveAll(root); err != nil {
+		log.Printf("[RD WebDAV] Could not remove generated symlink tree %s: %v", root, err)
+		return false
+	}
+	return true
 }
 
 func rdWebDAVMetadataString(metadata models.Metadata, key string) string {
