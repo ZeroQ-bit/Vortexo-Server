@@ -4682,15 +4682,20 @@ func (h *Handler) runService(serviceName string) {
 
 	case services.ServiceDMMHashlistImport:
 		interval = 1 * time.Hour
+		var summary *services.DMMHashlistImportSummary
 		if h.dmmHashlistImporter != nil {
 			if h.settingsManager != nil {
 				if current := h.settingsManager.Get(); current != nil && !current.DMMLibraryImportEnabled && current.DMMLibraryFillMissingEnabled {
-					_, err = h.dmmHashlistImporter.FillMissingLibraryStreams(ctx)
+					summary, err = h.dmmHashlistImporter.FillMissingLibraryStreams(ctx)
 				} else {
-					_, err = h.dmmHashlistImporter.Import(ctx)
+					summary, err = h.dmmHashlistImporter.Import(ctx)
 				}
 			} else {
-				_, err = h.dmmHashlistImporter.Import(ctx)
+				summary, err = h.dmmHashlistImporter.Import(ctx)
+			}
+			if err == nil && summary != nil && summary.StreamsCached > 0 && h.cacheScanner != nil {
+				log.Printf("[DMM Hashlists] Queuing Real-Debrid library sync for %d newly cached stream(s)", summary.StreamsCached)
+				go h.runService(services.ServiceRDLibrarySync)
 			}
 		} else {
 			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")

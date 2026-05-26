@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"github.com/lib/pq"
@@ -643,6 +644,43 @@ func (s *StreamCacheStore) MarkRealDebridLibraryAddedForSeriesEpisode(ctx contex
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
 		return fmt.Errorf("no series stream found for series_id %d S%02dE%02d", seriesID, season, episode)
+	}
+
+	return nil
+}
+
+// MarkRealDebridLibraryAddedByHash marks every cached stream row for a torrent
+// hash as already present in the user's Real-Debrid account. DMM fill writes
+// both a primary stream and selectable stream option for the same hash; keeping
+// them in sync prevents duplicate addMagnet calls on later RD sync passes.
+func (s *StreamCacheStore) MarkRealDebridLibraryAddedByHash(ctx context.Context, hash string, torrentID string) error {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return nil
+	}
+
+	streamQuery := `
+		UPDATE media_streams
+		SET rd_library_added = true,
+		    rd_torrent_id = NULLIF($2, ''),
+		    rd_library_added_at = NOW(),
+		    updated_at = NOW()
+		WHERE LOWER(stream_hash) = LOWER($1)
+	`
+	if _, err := s.db.ExecContext(ctx, streamQuery, hash, torrentID); err != nil {
+		return fmt.Errorf("failed to mark Real-Debrid streams by hash: %w", err)
+	}
+
+	optionQuery := `
+		UPDATE media_stream_options
+		SET rd_library_added = true,
+		    rd_torrent_id = NULLIF($2, ''),
+		    last_checked = NOW(),
+		    updated_at = NOW()
+		WHERE LOWER(stream_hash) = LOWER($1)
+	`
+	if _, err := s.db.ExecContext(ctx, optionQuery, hash, torrentID); err != nil {
+		return fmt.Errorf("failed to mark Real-Debrid stream options by hash: %w", err)
 	}
 
 	return nil

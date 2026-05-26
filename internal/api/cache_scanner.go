@@ -918,6 +918,7 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 
 	totalSynced := 0
 	rdAttempts := 0
+	syncedHashTorrentIDs := make(map[string]string)
 	waitForRealDebridSlot := func() error {
 		if rdAttempts == 0 {
 			rdAttempts++
@@ -989,16 +990,33 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 			if item.option {
 				markUnavailable = cs.cacheStore.MarkStreamOptionUnavailableByID
 			}
+			if torrentID, ok := syncedHashTorrentIDs[hash]; ok {
+				if markErr := markAdded(ctx, stream.ID, torrentID); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to mark duplicate cached stream %s %d as Real-Debrid synced: %v", stream.MediaType, stream.MediaID, markErr)
+					continue
+				}
+				if markErr := cs.cacheStore.MarkRealDebridLibraryAddedByHash(ctx, hash, torrentID); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to mark duplicate hash %s as Real-Debrid synced: %v", truncateForLog(hash, 12), markErr)
+				}
+				totalSynced++
+				syncedThisBatch++
+				continue
+			}
 			if err := waitForRealDebridSlot(); err != nil {
 				return err
 			}
+			addedTorrentID := ""
 			if err := cs.maybeAddCachedStreamToRealDebrid(
 				ctx,
 				label,
 				hash,
 				fileIdx,
 				func(torrentID string) error {
-					return markAdded(ctx, stream.ID, torrentID)
+					addedTorrentID = torrentID
+					if err := markAdded(ctx, stream.ID, torrentID); err != nil {
+						return err
+					}
+					return cs.cacheStore.MarkRealDebridLibraryAddedByHash(ctx, hash, torrentID)
 				},
 				force,
 			); err != nil {
@@ -1033,6 +1051,7 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 				continue
 			}
 
+			syncedHashTorrentIDs[hash] = addedTorrentID
 			totalSynced++
 			syncedThisBatch++
 			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending)-syncedThisBatch, fmt.Sprintf("Added %s to Real-Debrid", label))
