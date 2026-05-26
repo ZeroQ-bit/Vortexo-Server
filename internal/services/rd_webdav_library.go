@@ -1,8 +1,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -24,6 +26,7 @@ const (
 	rdWebDAVLibrarySource = "rd_webdav"
 	rdWebDAVRemoteName    = "rdwebdav"
 	rdWebDAVMinVideoBytes = 100 << 20
+	rdWebDAVMountTimeout  = 30 * time.Second
 )
 
 var (
@@ -71,6 +74,26 @@ type rdWebDAVMediaCandidate struct {
 	SourcePath string
 	SizeBytes  int64
 	Ext        string
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.buf.Len()+len(p) > 16*1024 {
+		b.buf.Reset()
+	}
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func NewRDWebDAVLibraryBuilder(
@@ -223,6 +246,9 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 	if _, err := exec.LookPath("rclone"); err != nil {
 		return fmt.Errorf("rclone is not installed in this container: %w", err)
 	}
+	if err := ensureFuseDeviceReady(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		return fmt.Errorf("create rclone mount path: %w", err)
 	}
@@ -230,7 +256,10 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.mountCmd != nil && b.mountCmd.Process != nil {
-		return nil
+		if isMountedPath(mountPath) {
+			return nil
+		}
+		return fmt.Errorf("rclone mount process is running but %s is not mounted yet", mountPath)
 	}
 
 	obscuredPass, err := obscureRclonePassword(ctx, cfg.RDWebDAVPassword)
@@ -250,22 +279,28 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		"--config", configPath,
 		"mount", rdWebDAVRemoteName + ":", mountPath,
 		"--read-only",
-		"--allow-other",
 		"--dir-cache-time", "30s",
 		"--poll-interval", "0",
 		"--vfs-cache-mode", "off",
 		"--umask", "002",
+		"--log-level", "INFO",
 	}
 	cmd := exec.CommandContext(context.Background(), "rclone", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var rcloneOutput synchronizedBuffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &rcloneOutput)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &rcloneOutput)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start rclone mount: %w", err)
 	}
 	b.mountCmd = cmd
+	done := make(chan error, 1)
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("[RD WebDAV] rclone mount exited: %v", err)
+		err := cmd.Wait()
+		done <- err
+		if err != nil {
+			log.Printf("[RD WebDAV] rclone mount exited: %v output=%s", err, compactRcloneOutput(rcloneOutput.String()))
+		} else {
+			log.Printf("[RD WebDAV] rclone mount exited normally")
 		}
 		b.mu.Lock()
 		if b.mountCmd == cmd {
@@ -274,14 +309,24 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		b.mu.Unlock()
 	}()
 
-	for i := 0; i < 20; i++ {
+	deadline := time.Now().Add(rdWebDAVMountTimeout)
+	for time.Now().Before(deadline) {
 		if isMountedPath(mountPath) {
 			log.Printf("[RD WebDAV] rclone mounted %s", mountPath)
 			return nil
 		}
+		select {
+		case err := <-done:
+			output := compactRcloneOutput(rcloneOutput.String())
+			if err != nil {
+				return fmt.Errorf("rclone mount exited before %s became ready: %w: %s", mountPath, err, output)
+			}
+			return fmt.Errorf("rclone mount exited before %s became ready: %s", mountPath, output)
+		default:
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("rclone mount did not become ready at %s", mountPath)
+	return fmt.Errorf("rclone mount did not become ready at %s after %s; recent output: %s", mountPath, rdWebDAVMountTimeout, compactRcloneOutput(rcloneOutput.String()))
 }
 
 func obscureRclonePassword(ctx context.Context, password string) (string, error) {
@@ -295,6 +340,33 @@ func obscureRclonePassword(ctx context.Context, password string) (string, error)
 		return "", fmt.Errorf("rclone obscure returned an empty password")
 	}
 	return obscured, nil
+}
+
+func ensureFuseDeviceReady() error {
+	info, err := os.Stat("/dev/fuse")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("FUSE device /dev/fuse is not available; restart the container with /dev/fuse mounted and SYS_ADMIN capability, or disable server-managed rclone mount and mount Real-Debrid externally")
+		}
+		return fmt.Errorf("check FUSE device /dev/fuse: %w", err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("FUSE device /dev/fuse is a directory, expected a character device")
+	}
+	return nil
+}
+
+func compactRcloneOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "no rclone output"
+	}
+	output = rdWebDAVMultiSpacePattern.ReplaceAllString(output, " ")
+	const maxLen = 600
+	if len(output) > maxLen {
+		return output[len(output)-maxLen:]
+	}
+	return output
 }
 
 func collectRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath string, summary *RDWebDAVLibrarySummary) ([]string, error) {
