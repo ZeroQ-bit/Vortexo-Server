@@ -81,6 +81,7 @@ Vortexo Server is not meant to be a traditional downloader. It tracks metadata, 
 - **Real-Debrid Library Sync** — Adds the best cached library streams into your RD account when enabled
 - **DMM Provider Mode** — Uses DMM-style cached hash lookups as another stream source
 - **DMM Hashlist Import** — Scans public DMM hashlists in batches, verifies hashes when Real-Debrid allows bulk cache checks, matches high-confidence movies/episodes to TMDB, and writes stream-cache rows for IPTV availability filters
+- **DMM Missing-Stream Fill** — Uses the same DMM hashlist scan to attach cached streams only to movies and episodes already in your library
 - **Safer Stream Filtering** — Skips unreleased titles and retires obviously broken payloads such as subtitle-only or image-only results
 - **Configurable Workers** — RD library sync and cache scanning can run on short recurring intervals
 
@@ -274,6 +275,7 @@ Add Stremio-compatible provider URLs:
 - **Stream cache checks** mark movies and episodes as available or unavailable for IPTV filters
 - **DMM Provider Mode** can be enabled to query cached hash data as another stream source
 - **DMM Hashlist Import** adds high-confidence movies and series from public DMM hashlists after your content/release exclusions; if Real-Debrid disables bulk cache checks, Vortexo Server trusts the DMM cache marker and still verifies playback through Real-Debrid before serving
+- **DMM Missing-Stream Fill** keeps the DMM scan in cache-only mode, so MDBList/imported titles can get streams without importing the whole DMM library
 - **Important:** Plex-visible folders are handled outside Vortexo Server; use Riven or another filesystem library manager for that workflow
 
 ---

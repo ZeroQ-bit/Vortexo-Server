@@ -68,9 +68,10 @@ type SettingsResponse struct {
 	TorrentioProviders string `json:"torrentio_providers"`
 
 	// DMM
-	DMMProviderEnabled      bool   `json:"dmm_provider_enabled"`
-	DMMProviderURL          string `json:"dmm_provider_url"`
-	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"`
+	DMMProviderEnabled           bool   `json:"dmm_provider_enabled"`
+	DMMProviderURL               string `json:"dmm_provider_url"`
+	DMMLibraryImportEnabled      bool   `json:"dmm_library_import_enabled"`
+	DMMLibraryFillMissingEnabled bool   `json:"dmm_library_fill_missing_enabled"`
 
 	// Real-Debrid WebDAV Library
 	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`

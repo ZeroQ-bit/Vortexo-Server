@@ -142,9 +142,10 @@ type Settings struct {
 	CometMaxSize           string `json:"comet_max_size"`           // Max file size (e.g., "10GB" or "10GB,2GB")
 
 	// DMM Settings
-	DMMProviderEnabled      bool   `json:"dmm_provider_enabled"`       // Use Debrid Media Manager as an additional stream provider
-	DMMProviderURL          string `json:"dmm_provider_url"`           // DMM API base URL
-	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"` // Enable full DMM/hashlists library import once the importer is available
+	DMMProviderEnabled           bool   `json:"dmm_provider_enabled"`             // Use Debrid Media Manager as an additional stream provider
+	DMMProviderURL               string `json:"dmm_provider_url"`                 // DMM API base URL
+	DMMLibraryImportEnabled      bool   `json:"dmm_library_import_enabled"`       // Enable full DMM/hashlists library import once the importer is available
+	DMMLibraryFillMissingEnabled bool   `json:"dmm_library_fill_missing_enabled"` // Fill missing streams for existing library items from DMM hashlists
 
 	// Real-Debrid WebDAV Library Settings
 	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`            // Scan mounted RD WebDAV files into the local library
@@ -280,6 +281,7 @@ func getDefaultSettings() *Settings {
 		DMMProviderEnabled:              false,
 		DMMProviderURL:                  "https://debridmediamanager.com",
 		DMMLibraryImportEnabled:         false,
+		DMMLibraryFillMissingEnabled:    true,
 		RDWebDAVLibraryEnabled:          false,
 		RDWebDAVMountEnabled:            false,
 		RDWebDAVURL:                     "https://dav.real-debrid.com",
@@ -716,6 +718,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"dmm_provider_enabled":                 m.settings.DMMProviderEnabled,
 		"dmm_provider_url":                     m.settings.DMMProviderURL,
 		"dmm_library_import_enabled":           m.settings.DMMLibraryImportEnabled,
+		"dmm_library_fill_missing_enabled":     m.settings.DMMLibraryFillMissingEnabled,
 		"rd_webdav_library_enabled":            m.settings.RDWebDAVLibraryEnabled,
 		"rd_webdav_mount_enabled":              m.settings.RDWebDAVMountEnabled,
 		"rd_webdav_url":                        m.settings.RDWebDAVURL,
@@ -842,6 +845,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["dmm_library_import_enabled"].(bool); ok {
 		m.settings.DMMLibraryImportEnabled = v
+	}
+	if v, ok := updates["dmm_library_fill_missing_enabled"].(bool); ok {
+		m.settings.DMMLibraryFillMissingEnabled = v
 	}
 	if v, ok := updates["rd_webdav_library_enabled"].(bool); ok {
 		m.settings.RDWebDAVLibraryEnabled = v

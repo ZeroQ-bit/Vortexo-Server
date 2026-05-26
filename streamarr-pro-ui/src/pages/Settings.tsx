@@ -115,6 +115,7 @@ interface SettingsData {
   dmm_provider_enabled: boolean;
   dmm_provider_url: string;
   dmm_library_import_enabled: boolean;
+  dmm_library_fill_missing_enabled: boolean;
   rd_webdav_library_enabled: boolean;
   rd_webdav_mount_enabled: boolean;
   rd_webdav_url: string;
@@ -601,6 +602,9 @@ export default function Settings() {
       data.dmm_provider_enabled = Boolean(data.dmm_provider_enabled);
       data.dmm_library_import_enabled = Boolean(
         data.dmm_library_import_enabled,
+      );
+      data.dmm_library_fill_missing_enabled = Boolean(
+        data.dmm_library_fill_missing_enabled ?? true,
       );
       data.rd_webdav_library_enabled = Boolean(
         data.rd_webdav_library_enabled,
@@ -2727,6 +2731,40 @@ export default function Settings() {
                   Use DMM hashlists to seed Vortexo's stream cache for
                   Real-Debrid library sync and playback.
                 </p>
+              </div>
+
+              <div>
+                <label
+                  className={`flex items-start justify-between gap-4 rounded-xl border p-5 cursor-pointer transition-colors ${
+                    settings.dmm_library_fill_missing_enabled
+                      ? "bg-green-900/30 border-green-700"
+                      : "bg-[#2a2a2a]/50 border-white/10"
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Fill Missing Streams
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Scan DMM hashlists in background batches and only attach
+                      cached Real-Debrid streams to movies and episodes already
+                      in your Vortexo library.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={
+                      settings.dmm_library_fill_missing_enabled ?? true
+                    }
+                    onChange={(e) =>
+                      updateSetting(
+                        "dmm_library_fill_missing_enabled",
+                        e.target.checked,
+                      )
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                </label>
               </div>
 
               <div>

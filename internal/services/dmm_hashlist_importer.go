@@ -37,6 +37,7 @@ const (
 	dmmHashlistIndexer              = "DMM-Hashlist"
 	dmmHashlistRequestUserAgent     = "Vortexo-Server DMM Hashlist Importer"
 	dmmHashlistStateFilename        = "state.json"
+	dmmHashlistFillStateFilename    = "missing_streams_state.json"
 	dmmHashlistMovieSimilarityFloor = 0.86
 	dmmHashlistShowSimilarityFloor  = 0.88
 )
@@ -125,6 +126,27 @@ type dmmCandidate struct {
 	Stream    models.TorrentStream
 }
 
+type dmmHashlistImportMode string
+
+const (
+	dmmHashlistImportFull  dmmHashlistImportMode = "full"
+	dmmHashlistFillMissing dmmHashlistImportMode = "fill_missing"
+)
+
+func (mode dmmHashlistImportMode) stateFilename() string {
+	if mode == dmmHashlistFillMissing {
+		return dmmHashlistFillStateFilename
+	}
+	return dmmHashlistStateFilename
+}
+
+func (mode dmmHashlistImportMode) label() string {
+	if mode == dmmHashlistFillMissing {
+		return "DMM missing-stream fill"
+	}
+	return "DMM import"
+}
+
 func NewDMMHashlistImporter(
 	movieStore *database.MovieStore,
 	seriesStore *database.SeriesStore,
@@ -158,6 +180,14 @@ func (i *DMMHashlistImporter) UpdateTMDBClient(tmdbClient *TMDBClient) {
 }
 
 func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSummary, error) {
+	return i.importWithMode(ctx, dmmHashlistImportFull)
+}
+
+func (i *DMMHashlistImporter) FillMissingLibraryStreams(ctx context.Context) (*DMMHashlistImportSummary, error) {
+	return i.importWithMode(ctx, dmmHashlistFillMissing)
+}
+
+func (i *DMMHashlistImporter) importWithMode(ctx context.Context, mode dmmHashlistImportMode) (*DMMHashlistImportSummary, error) {
 	summary := &DMMHashlistImportSummary{}
 	if i == nil || i.settingsGetter == nil {
 		return summary, fmt.Errorf("DMM hashlist importer not initialized")
@@ -167,8 +197,16 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 	defer i.mu.Unlock()
 
 	cfg := i.settingsGetter()
-	if cfg == nil || !cfg.DMMLibraryImportEnabled {
+	if cfg == nil {
+		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "DMM settings unavailable")
+		return summary, nil
+	}
+	if mode == dmmHashlistImportFull && !cfg.DMMLibraryImportEnabled {
 		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "DMM full library import disabled")
+		return summary, nil
+	}
+	if mode == dmmHashlistFillMissing && !cfg.DMMLibraryFillMissingEnabled {
+		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "DMM missing-stream fill disabled")
 		return summary, nil
 	}
 	if i.tmdbClient == nil || strings.TrimSpace(cfg.TMDBAPIKey) == "" {
@@ -178,7 +216,7 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 		return summary, fmt.Errorf("Real-Debrid API key is required to verify DMM hashes are cached")
 	}
 
-	state, err := i.loadState()
+	state, err := i.loadState(mode.stateFilename())
 	if err != nil {
 		return summary, err
 	}
@@ -275,7 +313,7 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 	summary.NextTorrentOffset = state.TorrentOffset
 
 	if len(candidates) == 0 {
-		if err := i.saveState(state); err != nil {
+		if err := i.saveState(mode.stateFilename(), state); err != nil {
 			log.Printf("[DMM Hashlists] Failed to save state: %v", err)
 		}
 		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "No high-confidence DMM candidates in this batch")
@@ -289,7 +327,7 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 	}
 	summary.CachedCandidates = len(cachedCandidates)
 	if len(cachedCandidates) == 0 {
-		if err := i.saveState(state); err != nil {
+		if err := i.saveState(mode.stateFilename(), state); err != nil {
 			log.Printf("[DMM Hashlists] Failed to save state: %v", err)
 		}
 		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "No currently cached Real-Debrid hashes in this batch")
@@ -309,15 +347,21 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 			ServiceDMMHashlistImport,
 			idx+1,
 			len(cachedCandidates),
-			fmt.Sprintf("Importing %s", candidate.Title),
+			fmt.Sprintf("%s: %s", mode.label(), candidate.Title),
 		)
 
 		switch candidate.MediaType {
 		case "movie":
-			added, cached, err := i.importMovieCandidate(ctx, cfg, candidate)
+			var added, cached bool
+			var err error
+			if mode == dmmHashlistFillMissing {
+				cached, err = i.fillMovieCandidateStream(ctx, candidate)
+			} else {
+				added, cached, err = i.importMovieCandidate(ctx, cfg, candidate)
+			}
 			if err != nil {
 				summary.Errors++
-				log.Printf("[DMM Hashlists] Movie import failed for %s (%d): %v", candidate.Title, candidate.Year, err)
+				log.Printf("[DMM Hashlists] Movie %s failed for %s (%d): %v", mode.label(), candidate.Title, candidate.Year, err)
 				continue
 			}
 			if added {
@@ -328,10 +372,16 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 			}
 			imported++
 		case "series":
-			added, cached, err := i.importSeriesCandidate(ctx, cfg, candidate)
+			var added, cached bool
+			var err error
+			if mode == dmmHashlistFillMissing {
+				cached, err = i.fillSeriesCandidateStream(ctx, candidate)
+			} else {
+				added, cached, err = i.importSeriesCandidate(ctx, cfg, candidate)
+			}
 			if err != nil {
 				summary.Errors++
-				log.Printf("[DMM Hashlists] Series import failed for %s S%02dE%02d: %v", candidate.Title, candidate.Season, candidate.Episode, err)
+				log.Printf("[DMM Hashlists] Series %s failed for %s S%02dE%02d: %v", mode.label(), candidate.Title, candidate.Season, candidate.Episode, err)
 				continue
 			}
 			if added {
@@ -346,7 +396,7 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 		time.Sleep(120 * time.Millisecond)
 	}
 
-	if err := i.saveState(state); err != nil {
+	if err := i.saveState(mode.stateFilename(), state); err != nil {
 		log.Printf("[DMM Hashlists] Failed to save state: %v", err)
 	}
 
@@ -354,11 +404,12 @@ func (i *DMMHashlistImporter) Import(ctx context.Context) (*DMMHashlistImportSum
 		ServiceDMMHashlistImport,
 		imported,
 		len(cachedCandidates),
-		fmt.Sprintf("DMM import complete: +%d movies, +%d series, %d cached streams",
+		fmt.Sprintf("%s complete: +%d movies, +%d series, %d cached streams",
+			mode.label(),
 			summary.MoviesImported, summary.SeriesImported, summary.StreamsCached),
 	)
-	log.Printf("[DMM Hashlists] Import batch complete: files=%d/%d torrents=%d candidates=%d cached=%d movies=%d series=%d streams=%d skipped=%d errors=%d next_cursor=%d next_torrent_offset=%d",
-		summary.FilesProcessed, summary.FilesTotal, summary.TorrentsSeen, summary.CandidatesMatched, summary.CachedCandidates,
+	log.Printf("[DMM Hashlists] %s batch complete: files=%d/%d torrents=%d candidates=%d cached=%d movies=%d series=%d streams=%d skipped=%d errors=%d next_cursor=%d next_torrent_offset=%d",
+		mode.label(), summary.FilesProcessed, summary.FilesTotal, summary.TorrentsSeen, summary.CandidatesMatched, summary.CachedCandidates,
 		summary.MoviesImported, summary.SeriesImported, summary.StreamsCached, summary.Skipped, summary.Errors, summary.NextCursor, summary.NextTorrentOffset)
 
 	return summary, nil
@@ -694,6 +745,92 @@ func (i *DMMHashlistImporter) importSeriesCandidate(ctx context.Context, cfg *is
 		return added, false, err
 	}
 	return added, cached, nil
+}
+
+func (i *DMMHashlistImporter) fillMovieCandidateStream(ctx context.Context, candidate dmmCandidate) (bool, error) {
+	movie, err := i.matchMovie(ctx, candidate)
+	if err != nil {
+		return false, err
+	}
+	if movie == nil {
+		return false, nil
+	}
+
+	existing, err := i.movieStore.GetByTMDBID(ctx, movie.TMDBID)
+	if err != nil || existing == nil {
+		return false, nil
+	}
+	hasStream, err := i.movieHasCachedStream(ctx, int(existing.ID))
+	if err != nil {
+		return false, err
+	}
+	if hasStream {
+		return false, nil
+	}
+
+	i.updateMovieIMDbID(ctx, existing)
+	return i.cacheMovieCandidateStream(ctx, existing.ID, candidate)
+}
+
+func (i *DMMHashlistImporter) fillSeriesCandidateStream(ctx context.Context, candidate dmmCandidate) (bool, error) {
+	series, err := i.matchSeries(ctx, candidate)
+	if err != nil {
+		return false, err
+	}
+	if series == nil {
+		return false, nil
+	}
+
+	existing, err := i.seriesStore.GetByTMDBID(ctx, series.TMDBID)
+	if err != nil || existing == nil {
+		return false, nil
+	}
+	hasStream, err := i.seriesEpisodeHasCachedStream(ctx, int(existing.ID), candidate.Season, candidate.Episode)
+	if err != nil {
+		return false, err
+	}
+	if hasStream {
+		return false, nil
+	}
+
+	i.updateSeriesIMDbID(ctx, existing)
+	return i.cacheSeriesCandidateStream(ctx, existing.ID, candidate)
+}
+
+func (i *DMMHashlistImporter) movieHasCachedStream(ctx context.Context, movieID int) (bool, error) {
+	if i.streamCacheStore == nil || movieID <= 0 {
+		return false, nil
+	}
+	options, err := i.streamCacheStore.GetStreamOptionsForMovie(ctx, movieID, 1)
+	if err != nil {
+		return false, err
+	}
+	if len(options) > 0 {
+		return true, nil
+	}
+	cached, err := i.streamCacheStore.GetCachedStream(ctx, movieID)
+	if err != nil {
+		return false, err
+	}
+	return cached != nil && cached.IsAvailable, nil
+}
+
+func (i *DMMHashlistImporter) seriesEpisodeHasCachedStream(ctx context.Context, seriesID, season, episode int) (bool, error) {
+	if i.streamCacheStore == nil || seriesID <= 0 || season <= 0 || episode <= 0 {
+		return false, nil
+	}
+	options, err := i.streamCacheStore.GetStreamOptionsForSeriesEpisode(ctx, seriesID, season, episode, 1)
+	if err != nil {
+		return false, err
+	}
+	if len(options) > 0 {
+		return true, nil
+	}
+	cached, err := i.streamCacheStore.GetCachedSeriesEpisode(ctx, seriesID, season, episode)
+	if err != nil {
+		return false, err
+	}
+	return cached != nil && cached.IsAvailable, nil
 }
 
 func (i *DMMHashlistImporter) matchMovie(ctx context.Context, candidate dmmCandidate) (*models.Movie, error) {
@@ -1206,9 +1343,9 @@ func isValidDMMHash(hash string) bool {
 	return true
 }
 
-func (i *DMMHashlistImporter) loadState() (dmmHashlistState, error) {
+func (i *DMMHashlistImporter) loadState(filename string) (dmmHashlistState, error) {
 	var state dmmHashlistState
-	data, err := os.ReadFile(filepath.Join(i.cacheDir, dmmHashlistStateFilename))
+	data, err := os.ReadFile(filepath.Join(i.cacheDir, filename))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return state, nil
@@ -1221,7 +1358,7 @@ func (i *DMMHashlistImporter) loadState() (dmmHashlistState, error) {
 	return state, nil
 }
 
-func (i *DMMHashlistImporter) saveState(state dmmHashlistState) error {
+func (i *DMMHashlistImporter) saveState(filename string, state dmmHashlistState) error {
 	if err := os.MkdirAll(i.cacheDir, 0755); err != nil {
 		return err
 	}
@@ -1229,5 +1366,5 @@ func (i *DMMHashlistImporter) saveState(state dmmHashlistState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(i.cacheDir, dmmHashlistStateFilename), data, 0644)
+	return os.WriteFile(filepath.Join(i.cacheDir, filename), data, 0644)
 }

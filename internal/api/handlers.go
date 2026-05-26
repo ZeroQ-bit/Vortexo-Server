@@ -3296,7 +3296,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		log.Printf(
-			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v rd_webdav=%v",
+			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v dmm_fill_missing=%v rd_webdav=%v",
 			newSettings.StremioAddon.Enabled,
 			len(newSettings.StremioAddons),
 			enabledProviderAddons,
@@ -3304,6 +3304,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			strings.TrimSpace(newSettings.RealDebridAPIKey) != "",
 			newSettings.DMMProviderEnabled,
 			newSettings.DMMLibraryImportEnabled,
+			newSettings.DMMLibraryFillMissingEnabled,
 			newSettings.RDWebDAVLibraryEnabled,
 		)
 
@@ -3357,6 +3358,12 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 		if !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
 			log.Printf("[Settings] DMM full library import enabled; starting hashlist importer batch")
+			if h.dmmHashlistImporter != nil {
+				go h.runService(services.ServiceDMMHashlistImport)
+			}
+		}
+		if !oldSettings.DMMLibraryFillMissingEnabled && newSettings.DMMLibraryFillMissingEnabled {
+			log.Printf("[Settings] DMM missing-stream fill enabled; starting hashlist importer batch")
 			if h.dmmHashlistImporter != nil {
 				go h.runService(services.ServiceDMMHashlistImport)
 			}
@@ -4676,7 +4683,15 @@ func (h *Handler) runService(serviceName string) {
 	case services.ServiceDMMHashlistImport:
 		interval = 1 * time.Hour
 		if h.dmmHashlistImporter != nil {
-			_, err = h.dmmHashlistImporter.Import(ctx)
+			if h.settingsManager != nil {
+				if current := h.settingsManager.Get(); current != nil && !current.DMMLibraryImportEnabled && current.DMMLibraryFillMissingEnabled {
+					_, err = h.dmmHashlistImporter.FillMissingLibraryStreams(ctx)
+				} else {
+					_, err = h.dmmHashlistImporter.Import(ctx)
+				}
+			} else {
+				_, err = h.dmmHashlistImporter.Import(ctx)
+			}
 		} else {
 			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")
 		}

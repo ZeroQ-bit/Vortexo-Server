@@ -794,9 +794,14 @@ func main() {
 			}
 
 			current := settingsManager.Get()
-			if current != nil && current.DMMLibraryImportEnabled {
+			if current != nil && (current.DMMLibraryImportEnabled || current.DMMLibraryFillMissingEnabled) {
 				services.GlobalScheduler.MarkRunning(services.ServiceDMMHashlistImport)
-				_, err := dmmHashlistImporter.Import(workerCtx)
+				var err error
+				if current.DMMLibraryImportEnabled {
+					_, err = dmmHashlistImporter.Import(workerCtx)
+				} else {
+					_, err = dmmHashlistImporter.FillMissingLibraryStreams(workerCtx)
+				}
 				services.GlobalScheduler.MarkComplete(services.ServiceDMMHashlistImport, err, interval)
 				if err != nil {
 					log.Printf("❌ DMM hashlist import error: %v", err)
