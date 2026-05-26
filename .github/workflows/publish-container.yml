@@ -12,6 +12,11 @@ on:
         description: "Optional extra image tag (for example v1.2.3)"
         required: false
         type: string
+      platforms:
+        description: "Comma-separated target platforms"
+        required: false
+        default: "linux/amd64,linux/arm64"
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip publish]')
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -70,6 +76,11 @@ jobs:
 
       - name: Build and push multi-arch image
         run: |
+          PLATFORMS="${{ inputs.platforms }}"
+          if [[ -z "${PLATFORMS}" ]]; then
+            PLATFORMS="linux/amd64,linux/arm64"
+          fi
+
           TAG_ARGS=(
             --tag "${{ steps.vars.outputs.image_name }}:main"
             --tag "${{ steps.vars.outputs.image_name }}:main-${{ steps.vars.outputs.short_sha }}"
@@ -85,7 +96,7 @@ jobs:
           fi
 
           docker buildx build \
-            --platform linux/amd64,linux/arm64 \
+            --platform "${PLATFORMS}" \
             --push \
             --provenance=false \
             --sbom=false \
