@@ -1813,7 +1813,23 @@ func vortexoRealDebridFileDisplayName(path string) string {
 func prependVortexoPreferredStreams(preferred, existing []providers.TorrentioStream) []providers.TorrentioStream {
 	combined := make([]providers.TorrentioStream, 0, len(preferred)+len(existing))
 	seen := make(map[string]bool)
+	replaceStream := func(index int, stream providers.TorrentioStream) {
+		if key := vortexoStreamDedupKey(combined[index]); key != "" {
+			delete(seen, key)
+		}
+		combined[index] = stream
+		if key := vortexoStreamDedupKey(stream); key != "" {
+			seen[key] = true
+		}
+	}
 	appendStream := func(stream providers.TorrentioStream) {
+		for index, existingStream := range combined {
+			if !vortexoLibraryStreamsDescribeSameFile(existingStream, stream) {
+				continue
+			}
+			replaceStream(index, mergeVortexoLibraryStreams(existingStream, stream))
+			return
+		}
 		key := vortexoStreamDedupKey(stream)
 		if key != "" {
 			if seen[key] {
@@ -1830,6 +1846,114 @@ func prependVortexoPreferredStreams(preferred, existing []providers.TorrentioStr
 		appendStream(stream)
 	}
 	return combined
+}
+
+func vortexoLibraryStreamsDescribeSameFile(a, b providers.TorrentioStream) bool {
+	aWebDAV := vortexoStreamIsRDWebDAVLibrary(a)
+	bWebDAV := vortexoStreamIsRDWebDAVLibrary(b)
+	if aWebDAV == bWebDAV {
+		return false
+	}
+	if aWebDAV && !vortexoStreamIsSavedLibrarySource(b) {
+		return false
+	}
+	if bWebDAV && !vortexoStreamIsSavedLibrarySource(a) {
+		return false
+	}
+	return vortexoStreamSizesLikelyMatch(vortexoComparableStreamSize(a), vortexoComparableStreamSize(b))
+}
+
+func mergeVortexoLibraryStreams(a, b providers.TorrentioStream) providers.TorrentioStream {
+	metadata := vortexoRicherLibraryMetadataStream(a, b)
+	local := metadata
+	if decodeVortexoLocalFileStreamURL(a.URL) != "" {
+		local = a
+	} else if decodeVortexoLocalFileStreamURL(b.URL) != "" {
+		local = b
+	}
+
+	merged := local
+	if metadata.Title != "" {
+		merged.Title = metadata.Title
+	}
+	if metadata.Name != "" {
+		merged.Name = metadata.Name
+	}
+	if metadata.Quality != "" && !strings.EqualFold(metadata.Quality, "SD") {
+		merged.Quality = metadata.Quality
+	}
+	if merged.Quality == "" {
+		merged.Quality = metadata.Quality
+	}
+	if metadata.BehaviorHints.Filename != "" {
+		merged.BehaviorHints.Filename = metadata.BehaviorHints.Filename
+	}
+	if metadata.BehaviorHints.BingeGroup != "" {
+		merged.BehaviorHints.BingeGroup = metadata.BehaviorHints.BingeGroup
+	}
+	merged.Size = maxInt64(vortexoComparableStreamSize(a), vortexoComparableStreamSize(b))
+	merged.BehaviorHints.VideoSize = merged.Size
+	merged.Cached = a.Cached || b.Cached
+	merged.Seeders = maxInt(a.Seeders, b.Seeders)
+
+	if decodeVortexoLocalFileStreamURL(merged.URL) != "" {
+		merged.InfoHash = ""
+		merged.TorrentID = ""
+		merged.FileIdx = 0
+	}
+	return merged
+}
+
+func vortexoStreamIsRDWebDAVLibrary(stream providers.TorrentioStream) bool {
+	return strings.EqualFold(strings.TrimSpace(stream.Source), vortexoRDWebDAVLibrarySource) ||
+		decodeVortexoLocalFileStreamURL(stream.URL) != ""
+}
+
+func vortexoStreamIsSavedLibrarySource(stream providers.TorrentioStream) bool {
+	source := strings.TrimSpace(stream.Source)
+	return strings.EqualFold(source, vortexoRealDebridLibrarySource) ||
+		strings.EqualFold(source, vortexoLibraryCacheSource)
+}
+
+func vortexoComparableStreamSize(stream providers.TorrentioStream) int64 {
+	if stream.Size > 0 {
+		return stream.Size
+	}
+	if stream.BehaviorHints.VideoSize > 0 {
+		return stream.BehaviorHints.VideoSize
+	}
+	return 0
+}
+
+func vortexoStreamSizesLikelyMatch(a, b int64) bool {
+	if a <= 0 || b <= 0 {
+		return false
+	}
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	tolerance := int64(1024 * 1024)
+	if scaled := minInt64(a, b) / 1000; scaled > tolerance {
+		tolerance = scaled
+	}
+	if maxTolerance := int64(64 * 1024 * 1024); tolerance > maxTolerance {
+		tolerance = maxTolerance
+	}
+	return diff <= tolerance
+}
+
+func vortexoRicherLibraryMetadataStream(a, b providers.TorrentioStream) providers.TorrentioStream {
+	if vortexoStreamIsRDWebDAVLibrary(a) && !vortexoStreamIsRDWebDAVLibrary(b) {
+		return b
+	}
+	if vortexoStreamIsRDWebDAVLibrary(b) && !vortexoStreamIsRDWebDAVLibrary(a) {
+		return a
+	}
+	if len(firstNonEmpty(b.Title, b.Name, b.BehaviorHints.Filename)) > len(firstNonEmpty(a.Title, a.Name, a.BehaviorHints.Filename)) {
+		return b
+	}
+	return a
 }
 
 func vortexoStreamDedupKey(stream providers.TorrentioStream) string {
@@ -1884,6 +2008,20 @@ func absInt(value int) int {
 		return -value
 	}
 	return value
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStream, req vortexoSourcesRequest) []vortexoSource {

@@ -281,6 +281,61 @@ func TestPrependVortexoPreferredStreamsKeepsRealDebridLibraryFirst(t *testing.T)
 	}
 }
 
+func TestPrependVortexoPreferredStreamsMergesRDWebDAVDuplicateBySize(t *testing.T) {
+	const size = int64(141_122_400_000)
+	const localPath = "/rd-library/Movies/The Lord of the Rings The Return of the King (2003) {tmdb-122}.mkv"
+	const richTitle = "The.Lord.of.the.Rings.The.Return.of.the.King.2003.Extended.Edition.2160p.UHD.Remux.HEVC.DoVi.TrueHD.Atmos.7.1-playBD.mkv"
+	rdLibrary := providers.TorrentioStream{
+		Title:     richTitle,
+		Name:      richTitle,
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		TorrentID: "rd-torrent-1",
+		FileIdx:   4,
+		Quality:   "2160p",
+		Size:      size,
+		Cached:    true,
+		Source:    vortexoRealDebridLibrarySource,
+	}
+	rdLibrary.BehaviorHints.Filename = richTitle
+	webDAV := providers.TorrentioStream{
+		Title:   "The Lord of the Rings The Return of the King (2003) {tmdb-122}.mkv",
+		Name:    "The Lord of the Rings The Return of the King (2003) {tmdb-122}.mkv",
+		URL:     encodeVortexoLocalFileStreamURL(localPath),
+		Quality: "SD",
+		Size:    size,
+		Cached:  true,
+		Source:  vortexoRDWebDAVLibrarySource,
+	}
+
+	got := prependVortexoPreferredStreams([]providers.TorrentioStream{rdLibrary}, []providers.TorrentioStream{webDAV})
+	if len(got) != 1 {
+		t.Fatalf("combined streams = %d, want 1: %#v", len(got), got)
+	}
+	if got[0].URL != webDAV.URL {
+		t.Fatalf("merged URL = %q, want local WebDAV URL", got[0].URL)
+	}
+	if got[0].Title != richTitle {
+		t.Fatalf("merged title = %q, want %q", got[0].Title, richTitle)
+	}
+	if got[0].Quality != "2160p" {
+		t.Fatalf("merged quality = %q, want 2160p", got[0].Quality)
+	}
+	if got[0].Source != vortexoRDWebDAVLibrarySource {
+		t.Fatalf("merged source = %q, want RD WebDAV Library", got[0].Source)
+	}
+	if got[0].InfoHash != "" || got[0].TorrentID != "" || got[0].FileIdx != 0 {
+		t.Fatalf("local merged stream should not keep remote resolver fields: %#v", got[0])
+	}
+
+	reversed := prependVortexoPreferredStreams([]providers.TorrentioStream{webDAV}, []providers.TorrentioStream{rdLibrary})
+	if len(reversed) != 1 {
+		t.Fatalf("reversed combined streams = %d, want 1: %#v", len(reversed), reversed)
+	}
+	if reversed[0].URL != webDAV.URL || reversed[0].Title != richTitle || reversed[0].Quality != "2160p" {
+		t.Fatalf("reversed merge lost playback or metadata: %#v", reversed[0])
+	}
+}
+
 func TestVortexoRealDebridEpisodeFileMatchesExactEpisodeReference(t *testing.T) {
 	files := []services.RealDebridTorrentFile{
 		{ID: 1, Path: "/M.I.A. 2026 S01/Extras/sample.mkv", Bytes: 200_000},
