@@ -187,6 +187,41 @@ func TestBuildVortexoSourcesPrioritizesRealDebridLibraryTorrent(t *testing.T) {
 	}
 }
 
+func TestBuildVortexoSourcesUsesRDWebDAVLocalFileToken(t *testing.T) {
+	const localPath = "/app/rd-library/TV/M.I.A (2026) {tmdb-262388}/Season 01/M.I.A - S01E01 - Revenge {tmdb-6061110}.mkv"
+	handler := &Handler{}
+
+	sources := handler.buildVortexoSources([]providers.TorrentioStream{{
+		Name:   "M.I.A - S01E01 - Revenge {tmdb-6061110}.mkv",
+		Title:  "M.I.A - S01E01 - Revenge {tmdb-6061110}.mkv",
+		URL:    encodeVortexoLocalFileStreamURL(localPath),
+		Cached: true,
+		Source: vortexoRDWebDAVLibrarySource,
+		Size:   3_200_000_000,
+	}}, vortexoSourcesRequest{Type: "episode", Title: "M.I.A.", Year: 2026, Season: 1, Episode: 1})
+
+	if len(sources) != 1 {
+		t.Fatalf("buildVortexoSources returned %d sources, want 1", len(sources))
+	}
+	if sources[0].Priority != vortexoRDWebDAVLibraryPriority {
+		t.Fatalf("priority = %d, want %d", sources[0].Priority, vortexoRDWebDAVLibraryPriority)
+	}
+	if !strings.HasPrefix(sources[0].DirectURL, "/api/v1/vortexo/file/") {
+		t.Fatalf("direct URL = %q, want local file endpoint", sources[0].DirectURL)
+	}
+
+	token, err := decodeVortexoPlayToken(sources[0].ID)
+	if err != nil {
+		t.Fatalf("decodeVortexoPlayToken failed: %v", err)
+	}
+	if token.LocalPath != localPath {
+		t.Fatalf("token.LocalPath = %q, want %q", token.LocalPath, localPath)
+	}
+	if token.Hash != "" || token.URL != "" || token.TorrentID != "" {
+		t.Fatalf("local file token should not carry remote resolver fields: %#v", token)
+	}
+}
+
 func TestVortexoCachedStreamToTorrentioKeepsSavedRealDebridOption(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 

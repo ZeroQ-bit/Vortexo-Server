@@ -146,6 +146,18 @@ type Settings struct {
 	DMMProviderURL          string `json:"dmm_provider_url"`           // DMM API base URL
 	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"` // Enable full DMM/hashlists library import once the importer is available
 
+	// Real-Debrid WebDAV Library Settings
+	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`            // Scan mounted RD WebDAV files into the local library
+	RDWebDAVMountEnabled            bool   `json:"rd_webdav_mount_enabled"`              // Let the server start rclone mount
+	RDWebDAVURL                     string `json:"rd_webdav_url"`                        // Real-Debrid WebDAV endpoint
+	RDWebDAVUsername                string `json:"rd_webdav_username"`                   // WebDAV username for rclone
+	RDWebDAVPassword                string `json:"rd_webdav_password"`                   // WebDAV password/token for rclone
+	RDWebDAVMountPath               string `json:"rd_webdav_mount_path"`                 // Mounted RD filesystem path
+	RDWebDAVLibraryPath             string `json:"rd_webdav_library_path"`               // Clean symlink library path
+	RDWebDAVScanIntervalMinutes     int    `json:"rd_webdav_scan_interval_minutes"`      // Scan cadence
+	RDWebDAVCleanStaleSymlinks      bool   `json:"rd_webdav_clean_stale_symlinks"`       // Remove dead symlinks from clean library
+	RDWebDAVPreferWebDAVLibraryOnly bool   `json:"rd_webdav_prefer_webdav_library_only"` // Prefer library items built from RD WebDAV files
+
 	// Built-in Stremio Addon Settings
 	StremioAddon StremioAddonConfig `json:"stremio_addon"`
 
@@ -249,26 +261,34 @@ func getDefaultSettings() *Settings {
 		ImportAdultVODFromGitHub:       false,
 		AutoAddBestStreamsToRealDebrid: false,
 		// Content Filters
-		BlockBollywood:              false,
-		BalkanVODEnabled:            false,      // Disabled by default - users need to enable
-		BalkanVODAutoSync:           true,       // Auto-sync when enabled
-		BalkanVODSyncIntervalHours:  24,         // Check for updates daily
-		BalkanVODSelectedCategories: []string{}, // Empty = import all categories
-		AutoCacheIntervalHours:      6,
-		UseRealDebrid:               true,
-		UsePremiumize:               false,
-		CometEnabled:                false,
-		CometIndexers:               "bitorrent,therarbg,yts,eztv,thepiratebay",
-		CometOnlyShowCached:         true,      // Default to only cached for faster playback
-		CometMaxResults:             5,         // Default to 5 results per quality
-		CometSortBy:                 "quality", // Default sorting by quality then seeders
-		CometExcludedQualities:      "",        // No exclusions by default
-		CometPriorityLanguages:      "",        // No priority languages by default
-		CometMaxSize:                "",        // No size limit by default
-		DMMProviderEnabled:          false,
-		DMMProviderURL:              "https://debridmediamanager.com",
-		DMMLibraryImportEnabled:     false,
-		StremioAddons:               []StremioAddon{}, // Empty by default - users should configure their own addons
+		BlockBollywood:                  false,
+		BalkanVODEnabled:                false,      // Disabled by default - users need to enable
+		BalkanVODAutoSync:               true,       // Auto-sync when enabled
+		BalkanVODSyncIntervalHours:      24,         // Check for updates daily
+		BalkanVODSelectedCategories:     []string{}, // Empty = import all categories
+		AutoCacheIntervalHours:          6,
+		UseRealDebrid:                   true,
+		UsePremiumize:                   false,
+		CometEnabled:                    false,
+		CometIndexers:                   "bitorrent,therarbg,yts,eztv,thepiratebay",
+		CometOnlyShowCached:             true,      // Default to only cached for faster playback
+		CometMaxResults:                 5,         // Default to 5 results per quality
+		CometSortBy:                     "quality", // Default sorting by quality then seeders
+		CometExcludedQualities:          "",        // No exclusions by default
+		CometPriorityLanguages:          "",        // No priority languages by default
+		CometMaxSize:                    "",        // No size limit by default
+		DMMProviderEnabled:              false,
+		DMMProviderURL:                  "https://debridmediamanager.com",
+		DMMLibraryImportEnabled:         false,
+		RDWebDAVLibraryEnabled:          false,
+		RDWebDAVMountEnabled:            false,
+		RDWebDAVURL:                     "https://dav.real-debrid.com",
+		RDWebDAVMountPath:               "/mnt/rd",
+		RDWebDAVLibraryPath:             "/app/rd-library",
+		RDWebDAVScanIntervalMinutes:     60,
+		RDWebDAVCleanStaleSymlinks:      true,
+		RDWebDAVPreferWebDAVLibraryOnly: false,
+		StremioAddons:                   []StremioAddon{}, // Empty by default - users should configure their own addons
 		StremioAddon: StremioAddonConfig{
 			Enabled:          false,
 			PublicServerURL:  "",
@@ -668,58 +688,68 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 	defer m.mu.RUnlock()
 
 	return map[string]interface{}{
-		"tmdb_api_key":                        m.settings.TMDBAPIKey,
-		"fanart_tv_api_key":                   m.settings.FanartTVAPIKey,
-		"realdebrid_api_key":                  m.settings.RealDebridAPIKey,
-		"realdebrid_token":                    m.settings.RealDebridAPIKey,
-		"premiumize_api_key":                  m.settings.PremiumizeAPIKey,
-		"mdblist_api_key":                     m.settings.MDBListAPIKey,
-		"trakt_client_id":                     m.settings.TraktClientID,
-		"trakt_client_secret":                 m.settings.TraktClientSecret,
-		"subtitle_translation_api_url":        m.settings.SubtitleTranslationAPIURL,
-		"subtitle_translation_api_key":        m.settings.SubtitleTranslationAPIKey,
-		"opensubtitles_enabled":               m.settings.OpenSubtitlesEnabled,
-		"opensubtitles_api_key":               m.settings.OpenSubtitlesAPIKey,
-		"opensubtitles_username":              m.settings.OpenSubtitlesUsername,
-		"opensubtitles_password":              m.settings.OpenSubtitlesPassword,
-		"opensubtitles_languages":             m.settings.OpenSubtitlesLanguages,
-		"use_realdebrid":                      m.settings.UseRealDebrid,
-		"use_premiumize":                      m.settings.UsePremiumize,
-		"comet_enabled":                       m.settings.CometEnabled,
-		"comet_indexers":                      m.settings.CometIndexers,
-		"comet_only_show_cached":              m.settings.CometOnlyShowCached,
-		"comet_max_results":                   m.settings.CometMaxResults,
-		"comet_sort_by":                       m.settings.CometSortBy,
-		"comet_excluded_qualities":            m.settings.CometExcludedQualities,
-		"comet_priority_languages":            m.settings.CometPriorityLanguages,
-		"comet_max_size":                      m.settings.CometMaxSize,
-		"dmm_provider_enabled":                m.settings.DMMProviderEnabled,
-		"dmm_provider_url":                    m.settings.DMMProviderURL,
-		"dmm_library_import_enabled":          m.settings.DMMLibraryImportEnabled,
-		"total_pages":                         m.settings.TotalPages,
-		"min_year":                            m.settings.MinYear,
-		"min_runtime":                         m.settings.MinRuntime,
-		"max_resolution":                      m.settings.MaxResolution,
-		"auto_cache_interval_hours":           m.settings.AutoCacheIntervalHours,
-		"user_create_playlist":                m.settings.UserCreatePlaylist,
-		"include_adult_vod":                   m.settings.IncludeAdultVOD,
-		"import_adult_vod_from_github":        m.settings.ImportAdultVODFromGitHub,
-		"only_cached_streams":                 m.settings.OnlyCachedStreams,
-		"only_released_content":               m.settings.OnlyReleasedContent,
-		"hide_unavailable_content":            m.settings.HideUnavailableContent,
-		"auto_add_best_streams_to_realdebrid": m.settings.AutoAddBestStreamsToRealDebrid,
-		"block_bollywood":                     m.settings.BlockBollywood,
-		"debug":                               m.settings.Debug,
-		"language":                            m.settings.Language,
-		"series_origin_country":               m.settings.SeriesOriginCountry,
-		"movies_origin_country":               m.settings.MoviesOriginCountry,
-		"stremio_addons":                      m.settings.StremioAddons,
-		"server_port":                         m.settings.ServerPort,
-		"host":                                m.settings.Host,
-		"enable_notifications":                m.settings.EnableNotifications,
-		"discord_webhook_url":                 m.settings.DiscordWebhookURL,
-		"telegram_bot_token":                  m.settings.TelegramBotToken,
-		"telegram_chat_id":                    m.settings.TelegramChatID,
+		"tmdb_api_key":                         m.settings.TMDBAPIKey,
+		"fanart_tv_api_key":                    m.settings.FanartTVAPIKey,
+		"realdebrid_api_key":                   m.settings.RealDebridAPIKey,
+		"realdebrid_token":                     m.settings.RealDebridAPIKey,
+		"premiumize_api_key":                   m.settings.PremiumizeAPIKey,
+		"mdblist_api_key":                      m.settings.MDBListAPIKey,
+		"trakt_client_id":                      m.settings.TraktClientID,
+		"trakt_client_secret":                  m.settings.TraktClientSecret,
+		"subtitle_translation_api_url":         m.settings.SubtitleTranslationAPIURL,
+		"subtitle_translation_api_key":         m.settings.SubtitleTranslationAPIKey,
+		"opensubtitles_enabled":                m.settings.OpenSubtitlesEnabled,
+		"opensubtitles_api_key":                m.settings.OpenSubtitlesAPIKey,
+		"opensubtitles_username":               m.settings.OpenSubtitlesUsername,
+		"opensubtitles_password":               m.settings.OpenSubtitlesPassword,
+		"opensubtitles_languages":              m.settings.OpenSubtitlesLanguages,
+		"use_realdebrid":                       m.settings.UseRealDebrid,
+		"use_premiumize":                       m.settings.UsePremiumize,
+		"comet_enabled":                        m.settings.CometEnabled,
+		"comet_indexers":                       m.settings.CometIndexers,
+		"comet_only_show_cached":               m.settings.CometOnlyShowCached,
+		"comet_max_results":                    m.settings.CometMaxResults,
+		"comet_sort_by":                        m.settings.CometSortBy,
+		"comet_excluded_qualities":             m.settings.CometExcludedQualities,
+		"comet_priority_languages":             m.settings.CometPriorityLanguages,
+		"comet_max_size":                       m.settings.CometMaxSize,
+		"dmm_provider_enabled":                 m.settings.DMMProviderEnabled,
+		"dmm_provider_url":                     m.settings.DMMProviderURL,
+		"dmm_library_import_enabled":           m.settings.DMMLibraryImportEnabled,
+		"rd_webdav_library_enabled":            m.settings.RDWebDAVLibraryEnabled,
+		"rd_webdav_mount_enabled":              m.settings.RDWebDAVMountEnabled,
+		"rd_webdav_url":                        m.settings.RDWebDAVURL,
+		"rd_webdav_username":                   m.settings.RDWebDAVUsername,
+		"rd_webdav_password":                   m.settings.RDWebDAVPassword,
+		"rd_webdav_mount_path":                 m.settings.RDWebDAVMountPath,
+		"rd_webdav_library_path":               m.settings.RDWebDAVLibraryPath,
+		"rd_webdav_scan_interval_minutes":      m.settings.RDWebDAVScanIntervalMinutes,
+		"rd_webdav_clean_stale_symlinks":       m.settings.RDWebDAVCleanStaleSymlinks,
+		"rd_webdav_prefer_webdav_library_only": m.settings.RDWebDAVPreferWebDAVLibraryOnly,
+		"total_pages":                          m.settings.TotalPages,
+		"min_year":                             m.settings.MinYear,
+		"min_runtime":                          m.settings.MinRuntime,
+		"max_resolution":                       m.settings.MaxResolution,
+		"auto_cache_interval_hours":            m.settings.AutoCacheIntervalHours,
+		"user_create_playlist":                 m.settings.UserCreatePlaylist,
+		"include_adult_vod":                    m.settings.IncludeAdultVOD,
+		"import_adult_vod_from_github":         m.settings.ImportAdultVODFromGitHub,
+		"only_cached_streams":                  m.settings.OnlyCachedStreams,
+		"only_released_content":                m.settings.OnlyReleasedContent,
+		"hide_unavailable_content":             m.settings.HideUnavailableContent,
+		"auto_add_best_streams_to_realdebrid":  m.settings.AutoAddBestStreamsToRealDebrid,
+		"block_bollywood":                      m.settings.BlockBollywood,
+		"debug":                                m.settings.Debug,
+		"language":                             m.settings.Language,
+		"series_origin_country":                m.settings.SeriesOriginCountry,
+		"movies_origin_country":                m.settings.MoviesOriginCountry,
+		"stremio_addons":                       m.settings.StremioAddons,
+		"server_port":                          m.settings.ServerPort,
+		"host":                                 m.settings.Host,
+		"enable_notifications":                 m.settings.EnableNotifications,
+		"discord_webhook_url":                  m.settings.DiscordWebhookURL,
+		"telegram_bot_token":                   m.settings.TelegramBotToken,
+		"telegram_chat_id":                     m.settings.TelegramChatID,
 	}, nil
 }
 
@@ -812,6 +842,36 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["dmm_library_import_enabled"].(bool); ok {
 		m.settings.DMMLibraryImportEnabled = v
+	}
+	if v, ok := updates["rd_webdav_library_enabled"].(bool); ok {
+		m.settings.RDWebDAVLibraryEnabled = v
+	}
+	if v, ok := updates["rd_webdav_mount_enabled"].(bool); ok {
+		m.settings.RDWebDAVMountEnabled = v
+	}
+	if v, ok := updates["rd_webdav_url"].(string); ok {
+		m.settings.RDWebDAVURL = v
+	}
+	if v, ok := updates["rd_webdav_username"].(string); ok {
+		m.settings.RDWebDAVUsername = v
+	}
+	if v, ok := updates["rd_webdav_password"].(string); ok {
+		m.settings.RDWebDAVPassword = v
+	}
+	if v, ok := updates["rd_webdav_mount_path"].(string); ok {
+		m.settings.RDWebDAVMountPath = v
+	}
+	if v, ok := updates["rd_webdav_library_path"].(string); ok {
+		m.settings.RDWebDAVLibraryPath = v
+	}
+	if v, ok := updates["rd_webdav_scan_interval_minutes"].(float64); ok {
+		m.settings.RDWebDAVScanIntervalMinutes = int(v)
+	}
+	if v, ok := updates["rd_webdav_clean_stale_symlinks"].(bool); ok {
+		m.settings.RDWebDAVCleanStaleSymlinks = v
+	}
+	if v, ok := updates["rd_webdav_prefer_webdav_library_only"].(bool); ok {
+		m.settings.RDWebDAVPreferWebDAVLibraryOnly = v
 	}
 	if v, ok := updates["total_pages"].(float64); ok {
 		m.settings.TotalPages = int(v)

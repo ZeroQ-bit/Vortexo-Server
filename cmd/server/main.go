@@ -567,6 +567,15 @@ func main() {
 	)
 	log.Println("✓ DMM hashlist importer initialized")
 
+	rdWebDAVLibrary := services.NewRDWebDAVLibraryBuilder(
+		movieStore,
+		seriesStore,
+		episodeStore,
+		tmdbClient,
+		func() *settings.Settings { return settingsManager.Get() },
+	)
+	log.Println("✓ Real-Debrid WebDAV library builder initialized")
+
 	plexArtworkService := services.NewPlexArtworkService(plexArtworkStore)
 	log.Println("✓ Plex artwork cache service initialized")
 
@@ -798,6 +807,42 @@ func main() {
 		}
 	}()
 
+	// Worker: RD WebDAV clean symlink library (configurable interval)
+	go func() {
+		defaultInterval := 1 * time.Hour
+		log.Printf("🔗 RD WebDAV Library Worker: Starting (default interval: %v)", defaultInterval)
+
+		timer := time.NewTimer(90 * time.Second)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-workerCtx.Done():
+				log.Println("🛑 RD WebDAV Library Worker: Shutting down")
+				return
+			case <-timer.C:
+			}
+
+			nextInterval := defaultInterval
+			current := settingsManager.Get()
+			if current != nil {
+				if current.RDWebDAVScanIntervalMinutes > 0 {
+					nextInterval = time.Duration(current.RDWebDAVScanIntervalMinutes) * time.Minute
+				}
+				if current.RDWebDAVLibraryEnabled {
+					services.GlobalScheduler.MarkRunning(services.ServiceRDWebDAVLibrary)
+					_, err := rdWebDAVLibrary.Build(workerCtx)
+					services.GlobalScheduler.MarkComplete(services.ServiceRDWebDAVLibrary, err, nextInterval)
+					if err != nil {
+						log.Printf("❌ RD WebDAV library scan error: %v", err)
+					}
+				}
+			}
+
+			timer.Reset(nextInterval)
+		}
+	}()
+
 	// Worker: Plex Discover artwork cache (daily, polite 2-second page throttle)
 	go func() {
 		interval := 24 * time.Hour
@@ -937,6 +982,7 @@ func main() {
 		multiProvider,
 		mdbSyncService,
 		dmmHashlistImporter,
+		rdWebDAVLibrary,
 		plexArtworkStore,
 		plexArtworkService,
 		streamCacheStore,

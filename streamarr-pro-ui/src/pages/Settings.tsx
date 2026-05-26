@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Filter,
   Database,
+  Folder,
   Trash2,
   Info,
   Github,
@@ -114,6 +115,16 @@ interface SettingsData {
   dmm_provider_enabled: boolean;
   dmm_provider_url: string;
   dmm_library_import_enabled: boolean;
+  rd_webdav_library_enabled: boolean;
+  rd_webdav_mount_enabled: boolean;
+  rd_webdav_url: string;
+  rd_webdav_username: string;
+  rd_webdav_password: string;
+  rd_webdav_mount_path: string;
+  rd_webdav_library_path: string;
+  rd_webdav_scan_interval_minutes: number;
+  rd_webdav_clean_stale_symlinks: boolean;
+  rd_webdav_prefer_webdav_library_only: boolean;
   auto_add_best_streams_to_realdebrid: boolean;
 
   stremio_addons: Array<{ name: string; url: string; enabled: boolean }>;
@@ -259,6 +270,7 @@ type TabType =
   | "account"
   | "integrations"
   | "dmm"
+  | "library"
   | "content"
   | "livetv"
   | "services"
@@ -505,6 +517,7 @@ export default function Settings() {
     { id: "account" as TabType, label: "Account", icon: User },
     { id: "integrations" as TabType, label: "Integrations", icon: Layers },
     { id: "dmm" as TabType, label: "DMM", icon: Database },
+    { id: "library" as TabType, label: "Library", icon: Folder },
     { id: "content" as TabType, label: "Content", icon: Film },
     { id: "livetv" as TabType, label: "TV & IPTV", icon: Tv },
     { id: "services" as TabType, label: "Services", icon: Activity },
@@ -588,6 +601,27 @@ export default function Settings() {
       data.dmm_provider_enabled = Boolean(data.dmm_provider_enabled);
       data.dmm_library_import_enabled = Boolean(
         data.dmm_library_import_enabled,
+      );
+      data.rd_webdav_library_enabled = Boolean(
+        data.rd_webdav_library_enabled,
+      );
+      data.rd_webdav_mount_enabled = Boolean(data.rd_webdav_mount_enabled);
+      if (!data.rd_webdav_url) {
+        data.rd_webdav_url = "https://dav.real-debrid.com";
+      }
+      if (!data.rd_webdav_mount_path) {
+        data.rd_webdav_mount_path = "/mnt/rd";
+      }
+      if (!data.rd_webdav_library_path) {
+        data.rd_webdav_library_path = "/app/rd-library";
+      }
+      if (!data.rd_webdav_scan_interval_minutes) {
+        data.rd_webdav_scan_interval_minutes = 60;
+      }
+      data.rd_webdav_clean_stale_symlinks =
+        data.rd_webdav_clean_stale_symlinks !== false;
+      data.rd_webdav_prefer_webdav_library_only = Boolean(
+        data.rd_webdav_prefer_webdav_library_only,
       );
 
       setSettings(data);
@@ -2752,6 +2786,217 @@ export default function Settings() {
                   matched cached hashes in Vortexo Server's stream cache. If
                   Real-Debrid disables bulk cache checks, playback still verifies
                   each DMM hash through Real-Debrid before serving a stream.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* LIBRARY TAB */}
+        {activeTab === "library" && (
+          <div className="bg-[#1e1e1e] rounded-xl p-6 border border-white/10">
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-medium text-white mb-2">
+                  Real-Debrid WebDAV Library
+                </h3>
+                <p className="text-sm text-slate-400">
+                  Mount Real-Debrid with rclone, scan the WebDAV files, and
+                  build a clean TMDB-tagged symlink library for movies and TV.
+                </p>
+              </div>
+
+              <label
+                className={`flex items-start justify-between gap-4 rounded-xl border p-5 cursor-pointer transition-colors ${
+                  settings.rd_webdav_library_enabled
+                    ? "bg-green-900/30 border-green-700"
+                    : "bg-[#2a2a2a]/50 border-white/10"
+                }`}
+              >
+                <div>
+                  <div className="text-sm font-semibold text-white">
+                    Build Library From RD WebDAV
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1">
+                    Only files found in the mounted Real-Debrid WebDAV folder
+                    are imported, then linked into the clean library path.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.rd_webdav_library_enabled || false}
+                  onChange={(e) =>
+                    updateSetting("rd_webdav_library_enabled", e.target.checked)
+                  }
+                  className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                />
+              </label>
+
+              <div className="rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4 space-y-4">
+                <label className="flex items-start justify-between gap-4 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Start rclone Mount From Server
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Requires Docker FUSE permissions. If disabled, mount
+                      Real-Debrid yourself and keep the mount path below.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.rd_webdav_mount_enabled || false}
+                    onChange={(e) =>
+                      updateSetting("rd_webdav_mount_enabled", e.target.checked)
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                </label>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      WebDAV URL
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.rd_webdav_url || ""}
+                      onChange={(e) =>
+                        updateSetting("rd_webdav_url", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="https://dav.real-debrid.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Scan Interval
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      value={settings.rd_webdav_scan_interval_minutes || 60}
+                      onChange={(e) =>
+                        updateSetting(
+                          "rd_webdav_scan_interval_minutes",
+                          parseInt(e.target.value || "60", 10),
+                        )
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      WebDAV Username
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.rd_webdav_username || ""}
+                      onChange={(e) =>
+                        updateSetting("rd_webdav_username", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Real-Debrid WebDAV username"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      WebDAV Password
+                    </label>
+                    <input
+                      type="password"
+                      value={settings.rd_webdav_password || ""}
+                      onChange={(e) =>
+                        updateSetting("rd_webdav_password", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Real-Debrid WebDAV password or token"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      rclone Mount Path
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.rd_webdav_mount_path || ""}
+                      onChange={(e) =>
+                        updateSetting("rd_webdav_mount_path", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="/mnt/rd"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
+                      Clean Symlink Library Path
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.rd_webdav_library_path || ""}
+                      onChange={(e) =>
+                        updateSetting("rd_webdav_library_path", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="/app/rd-library"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-[#2a2a2a]/50 p-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.rd_webdav_clean_stale_symlinks !== false}
+                    onChange={(e) =>
+                      updateSetting(
+                        "rd_webdav_clean_stale_symlinks",
+                        e.target.checked,
+                      )
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Clean Dead Symlinks
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Remove links whose Real-Debrid WebDAV target disappeared.
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-[#2a2a2a]/50 p-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={
+                      settings.rd_webdav_prefer_webdav_library_only || false
+                    }
+                    onChange={(e) =>
+                      updateSetting(
+                        "rd_webdav_prefer_webdav_library_only",
+                        e.target.checked,
+                      )
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Prefer WebDAV Library Items
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      Keep the library centered on files that exist in your
+                      Real-Debrid WebDAV mount.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              {settings.rd_webdav_library_enabled && (
+                <div className="rounded-lg border border-green-700/50 bg-green-900/20 p-4 text-sm text-green-100">
+                  The RD WebDAV Library service will create Movies and TV
+                  symlink folders with TMDB IDs, then mark matched movies and
+                  episodes available in Vortexo Server.
                 </div>
               )}
             </div>

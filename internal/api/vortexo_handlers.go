@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -61,12 +62,16 @@ type vortexoSource struct {
 type vortexoPlayToken struct {
 	Hash      string `json:"hash,omitempty"`
 	URL       string `json:"url,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
 	Title     string `json:"title,omitempty"`
 	FileIdx   int    `json:"fileIdx,omitempty"`
 	TorrentID string `json:"torrentId,omitempty"`
 }
 
 const (
+	vortexoRDWebDAVLibrarySource     = "RD WebDAV Library"
+	vortexoRDWebDAVLibraryPriority   = 110
+	vortexoRDWebDAVLocalURLPrefix    = "vortexo-rd-webdav://"
 	vortexoRealDebridLibrarySource   = "Real-Debrid Library"
 	vortexoRealDebridLibraryPriority = 100
 	vortexoLibraryCacheSource        = "Vortexo Library Cache"
@@ -161,6 +166,9 @@ func (h *Handler) VortexoSources(w http.ResponseWriter, r *http.Request) {
 	if rdLibraryStreams := h.vortexoRealDebridLibraryStreams(r.Context(), req, releaseYear); len(rdLibraryStreams) > 0 {
 		libraryStreams = prependVortexoPreferredStreams(rdLibraryStreams, libraryStreams)
 	}
+	if webDAVStreams := h.vortexoWebDAVLibraryStreams(r.Context(), req); len(webDAVStreams) > 0 {
+		libraryStreams = prependVortexoPreferredStreams(webDAVStreams, libraryStreams)
+	}
 
 	sources := h.buildVortexoSources(libraryStreams, req)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -182,6 +190,16 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 	token, err := decodeVortexoPlayToken(tokenValue)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid source token")
+		return
+	}
+
+	if strings.TrimSpace(token.LocalPath) != "" {
+		fileURL := absoluteVortexoRequestURL(r, "/api/v1/vortexo/file/"+tokenValue)
+		if wantsVortexoPlayJSON(r) {
+			respondVortexoPlaybackURL(w, fileURL)
+			return
+		}
+		http.Redirect(w, r, fileURL, http.StatusFound)
 		return
 	}
 
@@ -232,6 +250,35 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, streamURL, http.StatusFound)
+}
+
+// VortexoLocalFile serves a tokenized local RD WebDAV symlink. It is separate
+// from VortexoPlay so clients that first resolve sources can receive a stable
+// HTTP URL and then let the player stream the file with range requests.
+func (h *Handler) VortexoLocalFile(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	tokenValue := strings.TrimSpace(vars["token"])
+	if tokenValue == "" {
+		respondError(w, http.StatusBadRequest, "missing file token")
+		return
+	}
+
+	token, err := decodeVortexoPlayToken(tokenValue)
+	if err != nil || strings.TrimSpace(token.LocalPath) == "" {
+		respondError(w, http.StatusBadRequest, "invalid file token")
+		return
+	}
+
+	filePath, err := h.safeVortexoLocalFilePath(token.LocalPath)
+	if err != nil {
+		log.Printf("[Vortexo] Refused local RD WebDAV file %q: %v", token.LocalPath, err)
+		respondError(w, http.StatusNotFound, "file not found")
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeFile(w, r, filePath)
 }
 
 // VortexoSubtitle fetches an OpenSubtitles track for a private-client media
@@ -1423,6 +1470,84 @@ func vortexoRealDebridLibrarySearchFilters(requestedTitle string) []string {
 	return filters
 }
 
+func (h *Handler) vortexoWebDAVLibraryStreams(ctx context.Context, req vortexoSourcesRequest) []providers.TorrentioStream {
+	if h == nil {
+		return nil
+	}
+
+	switch req.Type {
+	case "movie":
+		if h.movieStore == nil || req.TMDBID <= 0 {
+			return nil
+		}
+		movie, err := h.movieStore.GetByTMDBID(ctx, req.TMDBID)
+		if err != nil || movie == nil || !isRDWebDAVLibraryMetadata(movie.Metadata) {
+			return nil
+		}
+		if stream, ok := h.vortexoWebDAVStreamFromMetadata(movie.Metadata, firstNonEmpty(movie.Title, req.Title)); ok {
+			return []providers.TorrentioStream{stream}
+		}
+	case "episode":
+		if h.seriesStore == nil || h.episodeStore == nil || req.TMDBID <= 0 || req.Season <= 0 || req.Episode <= 0 {
+			return nil
+		}
+		series, err := h.seriesStore.GetByTMDBID(ctx, req.TMDBID)
+		if err != nil || series == nil {
+			return nil
+		}
+		episode, err := h.episodeStore.GetBySeriesAndNumber(ctx, series.ID, req.Season, req.Episode)
+		if err != nil || episode == nil || !isRDWebDAVLibraryMetadata(episode.Metadata) {
+			return nil
+		}
+		title := firstNonEmpty(episode.Title, req.Title)
+		if req.ParentTitle != "" {
+			title = strings.TrimSpace(fmt.Sprintf("%s S%02dE%02d %s", req.ParentTitle, req.Season, req.Episode, title))
+		}
+		if stream, ok := h.vortexoWebDAVStreamFromMetadata(episode.Metadata, title); ok {
+			stream.Seeders = 0
+			return []providers.TorrentioStream{stream}
+		}
+	}
+
+	return nil
+}
+
+func (h *Handler) vortexoWebDAVStreamFromMetadata(metadata models.Metadata, fallbackTitle string) (providers.TorrentioStream, bool) {
+	filePath := firstNonEmpty(
+		metadataString(metadata, "rd_webdav_symlink_path"),
+		metadataString(metadata, "rd_webdav_source_path"),
+	)
+	if filePath == "" {
+		return providers.TorrentioStream{}, false
+	}
+
+	safePath, err := h.safeVortexoLocalFilePath(filePath)
+	if err != nil {
+		log.Printf("[Vortexo] RD WebDAV library file unavailable: %s: %v", filePath, err)
+		return providers.TorrentioStream{}, false
+	}
+	info, err := os.Stat(safePath)
+	if err != nil || info.IsDir() {
+		return providers.TorrentioStream{}, false
+	}
+
+	fileName := filepath.Base(safePath)
+	title := firstNonEmpty(fileName, strings.TrimSpace(fallbackTitle), "RD WebDAV library file")
+	parsed := streammeta.ParseQualityFromTorrentName(title)
+	stream := providers.TorrentioStream{
+		Name:    title,
+		Title:   title,
+		URL:     encodeVortexoLocalFileStreamURL(safePath),
+		Quality: parsed.Resolution,
+		Size:    info.Size(),
+		Cached:  true,
+		Source:  vortexoRDWebDAVLibrarySource,
+	}
+	stream.BehaviorHints.Filename = title
+	stream.BehaviorHints.VideoSize = info.Size()
+	return stream, true
+}
+
 func (h *Handler) vortexoCachedLibraryStreams(ctx context.Context, req vortexoSourcesRequest) []providers.TorrentioStream {
 	if h == nil || h.streamCacheStore == nil {
 		return nil
@@ -1711,6 +1836,9 @@ func vortexoStreamDedupKey(stream providers.TorrentioStream) string {
 	if hash := vortexoStreamHash(stream); hash != "" {
 		return fmt.Sprintf("hash:%s:%d", hash, stream.FileIdx)
 	}
+	if localPath := decodeVortexoLocalFileStreamURL(stream.URL); localPath != "" {
+		return "rdwebdav:" + localPath
+	}
 	if direct := directVortexoPlaybackURL(stream.URL); direct != "" {
 		return "url:" + direct
 	}
@@ -1718,6 +1846,9 @@ func vortexoStreamDedupKey(stream providers.TorrentioStream) string {
 }
 
 func vortexoStreamSourcePriority(stream providers.TorrentioStream) int {
+	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoRDWebDAVLibrarySource) {
+		return vortexoRDWebDAVLibraryPriority
+	}
 	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoRealDebridLibrarySource) {
 		return vortexoRealDebridLibraryPriority
 	}
@@ -1759,6 +1890,7 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 	sources := make([]vortexoSource, 0, len(providerStreams))
 	for _, stream := range providerStreams {
 		directURL := directVortexoPlaybackURL(stream.URL)
+		localPath := decodeVortexoLocalFileStreamURL(stream.URL)
 		hash := stream.InfoHash
 		if !isValidHash(hash) && stream.URL != "" {
 			hash = extractHashFromURL(stream.URL)
@@ -1774,14 +1906,17 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			FileIdx:   stream.FileIdx,
 			TorrentID: strings.TrimSpace(stream.TorrentID),
 		}
-		if directURL != "" {
+		if localPath != "" {
+			token.Hash = ""
+			token.LocalPath = localPath
+		} else if directURL != "" {
 			token.Hash = ""
 			token.URL = directURL
 		} else if !isValidHash(hash) && stream.URL != "" {
 			token.Hash = ""
 			token.URL = stream.URL
 		}
-		if token.Hash == "" && token.URL == "" && token.TorrentID == "" {
+		if token.Hash == "" && token.URL == "" && token.LocalPath == "" && token.TorrentID == "" {
 			continue
 		}
 
@@ -1819,6 +1954,10 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 		if directURL != "" {
 			source.DirectURL = directURL
 			source.DownloadURL = directURL
+		} else if localPath != "" {
+			localURL := "/api/v1/vortexo/file/" + id
+			source.DirectURL = localURL
+			source.DownloadURL = localURL
 		}
 		if req.Type == "episode" {
 			source.Season = req.Season
@@ -1842,6 +1981,129 @@ func directVortexoPlaybackURL(rawURL string) string {
 	}
 
 	return ""
+}
+
+func encodeVortexoLocalFileStreamURL(filePath string) string {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return ""
+	}
+	return vortexoRDWebDAVLocalURLPrefix + base64.RawURLEncoding.EncodeToString([]byte(filePath))
+}
+
+func decodeVortexoLocalFileStreamURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if !strings.HasPrefix(rawURL, vortexoRDWebDAVLocalURLPrefix) {
+		return ""
+	}
+	encoded := strings.TrimPrefix(rawURL, vortexoRDWebDAVLocalURLPrefix)
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func absoluteVortexoRequestURL(r *http.Request, path string) string {
+	if r == nil {
+		return path
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	}
+	host := strings.TrimSpace(r.Host)
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = strings.Split(forwardedHost, ",")[0]
+	}
+	if host == "" {
+		return path
+	}
+	return fmt.Sprintf("%s://%s%s", strings.TrimSpace(scheme), strings.TrimSpace(host), path)
+}
+
+func (h *Handler) safeVortexoLocalFilePath(rawPath string) (string, error) {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return "", fmt.Errorf("empty local file path")
+	}
+
+	absPath, err := filepath.Abs(filepath.Clean(rawPath))
+	if err != nil {
+		return "", err
+	}
+
+	roots := h.vortexoLocalFileRoots()
+	if !pathWithinAnyRoot(absPath, roots) {
+		return "", fmt.Errorf("path is outside configured RD WebDAV roots")
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("path is a directory")
+	}
+
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		resolvedAbs, absErr := filepath.Abs(filepath.Clean(resolved))
+		if absErr != nil {
+			return "", absErr
+		}
+		if !pathWithinAnyRoot(resolvedAbs, roots) {
+			return "", fmt.Errorf("symlink target is outside configured RD WebDAV roots")
+		}
+	}
+
+	return absPath, nil
+}
+
+func (h *Handler) vortexoLocalFileRoots() []string {
+	libraryPath := "/app/rd-library"
+	mountPath := "/mnt/rd"
+	if h != nil && h.settingsManager != nil {
+		cfg := h.settingsManager.Get()
+		if strings.TrimSpace(cfg.RDWebDAVLibraryPath) != "" {
+			libraryPath = cfg.RDWebDAVLibraryPath
+		}
+		if strings.TrimSpace(cfg.RDWebDAVMountPath) != "" {
+			mountPath = cfg.RDWebDAVMountPath
+		}
+	}
+
+	roots := make([]string, 0, 2)
+	for _, root := range []string{libraryPath, mountPath} {
+		if abs, err := filepath.Abs(filepath.Clean(root)); err == nil && abs != "" {
+			roots = append(roots, abs)
+		}
+	}
+	return roots
+}
+
+func pathWithinAnyRoot(path string, roots []string) bool {
+	for _, root := range roots {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithinRoot(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func isVortexoResolverURL(rawURL string) bool {
@@ -2008,7 +2270,7 @@ func decodeVortexoPlayToken(value string) (vortexoPlayToken, error) {
 	if err := json.Unmarshal(data, &token); err != nil {
 		return token, err
 	}
-	if token.Hash == "" && token.URL == "" {
+	if token.Hash == "" && token.URL == "" && token.LocalPath == "" && token.TorrentID == "" {
 		return token, fmt.Errorf("empty token")
 	}
 	return token, nil

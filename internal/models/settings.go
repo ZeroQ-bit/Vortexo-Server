@@ -72,6 +72,18 @@ type SettingsResponse struct {
 	DMMProviderURL          string `json:"dmm_provider_url"`
 	DMMLibraryImportEnabled bool   `json:"dmm_library_import_enabled"`
 
+	// Real-Debrid WebDAV Library
+	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`
+	RDWebDAVMountEnabled            bool   `json:"rd_webdav_mount_enabled"`
+	RDWebDAVURL                     string `json:"rd_webdav_url"`
+	RDWebDAVUsername                string `json:"rd_webdav_username"`
+	RDWebDAVPassword                string `json:"rd_webdav_password"`
+	RDWebDAVMountPath               string `json:"rd_webdav_mount_path"`
+	RDWebDAVLibraryPath             string `json:"rd_webdav_library_path"`
+	RDWebDAVScanIntervalMinutes     int    `json:"rd_webdav_scan_interval_minutes"`
+	RDWebDAVCleanStaleSymlinks      bool   `json:"rd_webdav_clean_stale_symlinks"`
+	RDWebDAVPreferWebDAVLibraryOnly bool   `json:"rd_webdav_prefer_webdav_library_only"`
+
 	// Removed Comet Provider Settings
 
 	// Content Sources (GitHub lists)

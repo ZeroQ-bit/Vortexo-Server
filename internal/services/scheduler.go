@@ -187,6 +187,7 @@ const (
 	ServiceBalkanVODSync     = "balkan_vod_sync"
 	ServiceRDLibrarySync     = "rd_library_sync"
 	ServiceDMMHashlistImport = "dmm_hashlist_import"
+	ServiceRDWebDAVLibrary   = "rd_webdav_library"
 	ServicePlexArtworkSync   = "plex_artwork_sync"
 )
 
@@ -204,5 +205,6 @@ func InitializeDefaultServices() {
 	GlobalScheduler.Register(ServiceBalkanVODSync, "Imports Ex-Yu VOD content from Balkan GitHub repos", 24*time.Hour, true)
 	GlobalScheduler.Register(ServiceRDLibrarySync, "Adds cached library streams to Real-Debrid so playback links stay available", 5*time.Minute, true)
 	GlobalScheduler.Register(ServiceDMMHashlistImport, "Imports high-confidence cached movies and episodes from DMM hashlists", 1*time.Hour, true)
+	GlobalScheduler.Register(ServiceRDWebDAVLibrary, "Scans mounted Real-Debrid WebDAV files and builds a clean TMDB symlink library", 1*time.Hour, true)
 	GlobalScheduler.Register(ServicePlexArtworkSync, "Caches public Plex Discover artwork for local movies and shows", 24*time.Hour, true)
 }

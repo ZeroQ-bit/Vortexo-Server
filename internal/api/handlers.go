@@ -74,6 +74,7 @@ type Handler struct {
 	streamProvider      *providers.MultiProvider
 	mdbSyncService      *services.MDBListSyncService
 	dmmHashlistImporter *services.DMMHashlistImporter
+	rdWebDAVLibrary     *services.RDWebDAVLibraryBuilder
 	plexArtworkStore    *database.PlexArtworkCacheStore
 	plexArtworkService  *services.PlexArtworkService
 	// Phase 1: Smart Stream Caching
@@ -135,6 +136,9 @@ func (h *Handler) refreshRuntimeClients(cfg *settings.Settings) {
 	if h.dmmHashlistImporter != nil {
 		h.dmmHashlistImporter.UpdateTMDBClient(h.tmdbClient)
 	}
+	if h.rdWebDAVLibrary != nil {
+		h.rdWebDAVLibrary.UpdateTMDBClient(h.tmdbClient)
+	}
 
 	if h.cacheScanner != nil {
 		h.cacheScanner.SetProvider(h.streamProvider)
@@ -160,6 +164,22 @@ func contentBlockedPayload(reason string) map[string]interface{} {
 	}
 }
 
+func rdWebDAVSettingsChanged(oldSettings, newSettings *settings.Settings) bool {
+	if oldSettings == nil || newSettings == nil {
+		return false
+	}
+	return oldSettings.RDWebDAVLibraryEnabled != newSettings.RDWebDAVLibraryEnabled ||
+		oldSettings.RDWebDAVMountEnabled != newSettings.RDWebDAVMountEnabled ||
+		oldSettings.RDWebDAVURL != newSettings.RDWebDAVURL ||
+		oldSettings.RDWebDAVUsername != newSettings.RDWebDAVUsername ||
+		oldSettings.RDWebDAVPassword != newSettings.RDWebDAVPassword ||
+		oldSettings.RDWebDAVMountPath != newSettings.RDWebDAVMountPath ||
+		oldSettings.RDWebDAVLibraryPath != newSettings.RDWebDAVLibraryPath ||
+		oldSettings.RDWebDAVScanIntervalMinutes != newSettings.RDWebDAVScanIntervalMinutes ||
+		oldSettings.RDWebDAVCleanStaleSymlinks != newSettings.RDWebDAVCleanStaleSymlinks ||
+		oldSettings.RDWebDAVPreferWebDAVLibraryOnly != newSettings.RDWebDAVPreferWebDAVLibraryOnly
+}
+
 func (h *Handler) filterMoviesForLibrary(ctx context.Context, movies []*models.Movie) []*models.Movie {
 	st, opts, ok := h.activeContentFilterSettings()
 	if !ok {
@@ -168,6 +188,9 @@ func (h *Handler) filterMoviesForLibrary(ctx context.Context, movies []*models.M
 
 	filtered := make([]*models.Movie, 0, len(movies))
 	for _, movie := range movies {
+		if st.RDWebDAVPreferWebDAVLibraryOnly && !isRDWebDAVLibraryMetadata(movie.Metadata) {
+			continue
+		}
 		allowed, _ := services.MovieAllowedByContentFilters(movie, opts)
 		if !allowed {
 			continue
@@ -188,6 +211,9 @@ func (h *Handler) filterSeriesForLibrary(ctx context.Context, series []*models.S
 
 	filtered := make([]*models.Series, 0, len(series))
 	for _, item := range series {
+		if st.RDWebDAVPreferWebDAVLibraryOnly && !isRDWebDAVLibraryMetadata(item.Metadata) {
+			continue
+		}
 		allowed, _ := services.SeriesAllowedByContentFilters(item, opts)
 		if !allowed {
 			continue
@@ -281,6 +307,7 @@ func NewHandlerWithComponents(
 	streamProvider *providers.MultiProvider,
 	mdbSyncService *services.MDBListSyncService,
 	dmmHashlistImporter *services.DMMHashlistImporter,
+	rdWebDAVLibrary *services.RDWebDAVLibraryBuilder,
 	plexArtworkStore *database.PlexArtworkCacheStore,
 	plexArtworkService *services.PlexArtworkService,
 	streamCacheStore *database.StreamCacheStore,
@@ -306,6 +333,7 @@ func NewHandlerWithComponents(
 		streamProvider:      streamProvider,
 		mdbSyncService:      mdbSyncService,
 		dmmHashlistImporter: dmmHashlistImporter,
+		rdWebDAVLibrary:     rdWebDAVLibrary,
 		plexArtworkStore:    plexArtworkStore,
 		plexArtworkService:  plexArtworkService,
 		streamCacheStore:    streamCacheStore,
@@ -2085,6 +2113,24 @@ func hasVODSources(metadata models.Metadata) bool {
 	return false
 }
 
+func isRDWebDAVLibraryMetadata(metadata models.Metadata) bool {
+	if metadata == nil {
+		return false
+	}
+	if source, ok := metadata["source"].(string); ok && strings.EqualFold(source, "rd_webdav") {
+		return true
+	}
+	switch value := metadata["rd_webdav"].(type) {
+	case bool:
+		return value
+	case string:
+		normalized := strings.TrimSpace(strings.ToLower(value))
+		return normalized == "true" || normalized == "1" || normalized == "yes"
+	default:
+		return false
+	}
+}
+
 func (h *Handler) movieHasPlayableSource(ctx context.Context, movie *models.Movie) bool {
 	if movie == nil {
 		return false
@@ -2115,6 +2161,18 @@ func (h *Handler) seriesHasPlayableSource(ctx context.Context, series *models.Se
 
 	var exists bool
 	err := h.seriesStore.GetDB().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM library_episodes
+			WHERE series_id = $1
+			  AND COALESCE(available, false) = true
+		)
+	`, series.ID).Scan(&exists)
+	if err == nil && exists {
+		return true
+	}
+
+	err = h.seriesStore.GetDB().QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1
 			FROM media_streams
@@ -3180,7 +3238,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		log.Printf(
-			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v",
+			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v rd_webdav=%v",
 			newSettings.StremioAddon.Enabled,
 			len(newSettings.StremioAddons),
 			enabledProviderAddons,
@@ -3188,6 +3246,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			strings.TrimSpace(newSettings.RealDebridAPIKey) != "",
 			newSettings.DMMProviderEnabled,
 			newSettings.DMMLibraryImportEnabled,
+			newSettings.RDWebDAVLibraryEnabled,
 		)
 
 		// Get old settings to detect changes
@@ -3243,6 +3302,11 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			if h.dmmHashlistImporter != nil {
 				go h.runService(services.ServiceDMMHashlistImport)
 			}
+		}
+
+		if h.rdWebDAVLibrary != nil && rdWebDAVSettingsChanged(oldSettings, &newSettings) && newSettings.RDWebDAVLibraryEnabled {
+			log.Printf("[Settings] RD WebDAV library settings changed; starting scan")
+			go h.runService(services.ServiceRDWebDAVLibrary)
 		}
 
 		// Log playlist filter changes
@@ -4557,6 +4621,19 @@ func (h *Handler) runService(serviceName string) {
 			_, err = h.dmmHashlistImporter.Import(ctx)
 		} else {
 			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")
+		}
+
+	case services.ServiceRDWebDAVLibrary:
+		interval = 1 * time.Hour
+		if h.settingsManager != nil {
+			if current := h.settingsManager.Get(); current != nil && current.RDWebDAVScanIntervalMinutes > 0 {
+				interval = time.Duration(current.RDWebDAVScanIntervalMinutes) * time.Minute
+			}
+		}
+		if h.rdWebDAVLibrary != nil {
+			_, err = h.rdWebDAVLibrary.Build(ctx)
+		} else {
+			services.GlobalScheduler.UpdateProgress(services.ServiceRDWebDAVLibrary, 0, 0, "RD WebDAV library builder not initialized")
 		}
 
 	case services.ServicePlexArtworkSync:
