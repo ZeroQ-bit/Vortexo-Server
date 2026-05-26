@@ -487,6 +487,35 @@ func TestWantsVortexoPlayJSON(t *testing.T) {
 	}
 }
 
+func TestLegacyAPIStreamObjectsPreserveRDWebDAVLocalFileStreams(t *testing.T) {
+	const localPath = "/app/rd-library/TV/M.I.A (2026) {tmdb-262388}/Season 01/M.I.A - S01E01 - Revenge HEVC {tmdb-6061110}.mkv"
+
+	streams := legacyAPIStreamObjects([]providers.TorrentioStream{{
+		Name:   "M.I.A - S01E01 - Revenge HEVC {tmdb-6061110}.mkv",
+		Title:  "M.I.A - S01E01 - Revenge HEVC {tmdb-6061110}.mkv",
+		URL:    encodeVortexoLocalFileStreamURL(localPath),
+		Cached: true,
+		Source: vortexoRDWebDAVLibrarySource,
+		Size:   3_200_000_000,
+	}})
+
+	if len(streams) != 1 {
+		t.Fatalf("legacyAPIStreamObjects returned %d streams, want 1", len(streams))
+	}
+	if got := streams[0]["source"]; got != vortexoRDWebDAVLibrarySource {
+		t.Fatalf("source = %#v, want %q", got, vortexoRDWebDAVLibrarySource)
+	}
+	if got := streams[0]["url"]; got != encodeVortexoLocalFileStreamURL(localPath) {
+		t.Fatalf("url = %#v, want encoded local file stream URL", got)
+	}
+	if got := streams[0]["filename"]; got != "M.I.A - S01E01 - Revenge HEVC {tmdb-6061110}.mkv" {
+		t.Fatalf("filename = %#v, want file name", got)
+	}
+	if got := streams[0]["codec"]; got != "HEVC" {
+		t.Fatalf("codec = %#v, want HEVC", got)
+	}
+}
+
 func resetVortexoBlockedSourcesForTest() {
 	vortexoBlockedSources.Lock()
 	vortexoBlockedSources.byHash = make(map[string]vortexoBlockedSource)

@@ -1232,6 +1232,54 @@ func cachedStreamAPIObject(cached *models.CachedStream) map[string]interface{} {
 	}
 }
 
+func legacyAPIStreamObjects(providerStreams []providers.TorrentioStream) []map[string]interface{} {
+	apiStreams := make([]map[string]interface{}, 0, len(providerStreams))
+	for _, ps := range providerStreams {
+		displayTitle := firstNonEmptyString(ps.Title, ps.BehaviorHints.Filename, ps.Name)
+		displayName := firstNonEmptyString(ps.Name, displayTitle)
+		fileName := firstNonEmptyString(ps.BehaviorHints.Filename, displayTitle, displayName)
+
+		codec := ""
+		nameForCodec := strings.ToUpper(firstNonEmptyString(fileName, displayTitle, displayName))
+		if strings.Contains(nameForCodec, "X265") || strings.Contains(nameForCodec, "HEVC") {
+			codec = "HEVC"
+		} else if strings.Contains(nameForCodec, "X264") || strings.Contains(nameForCodec, "H264") {
+			codec = "H.264"
+		}
+
+		stream := map[string]interface{}{
+			"source":   ps.Source,
+			"quality":  ps.Quality,
+			"codec":    codec,
+			"url":      ps.URL,
+			"cached":   ps.Cached,
+			"seeds":    ps.Seeders,
+			"size_gb":  float64(ps.Size) / (1024 * 1024 * 1024),
+			"title":    displayTitle,
+			"name":     displayName,
+			"filename": fileName,
+		}
+		apiStreams = append(apiStreams, stream)
+	}
+
+	return apiStreams
+}
+
+func respondLegacyStreams(w http.ResponseWriter, cachedStreamObj map[string]interface{}, providerStreams []providers.TorrentioStream) {
+	apiStreams := legacyAPIStreamObjects(providerStreams)
+	if cachedStreamObj != nil {
+		allStreams := make([]interface{}, 0, len(apiStreams)+1)
+		allStreams = append(allStreams, cachedStreamObj)
+		for _, s := range apiStreams {
+			allStreams = append(allStreams, s)
+		}
+		respondJSON(w, http.StatusOK, allStreams)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, apiStreams)
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -1239,6 +1287,38 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func legacyMovieReleaseYear(movie *models.Movie) int {
+	if movie == nil {
+		return 0
+	}
+	if movie.ReleaseDate != nil && !movie.ReleaseDate.IsZero() {
+		return movie.ReleaseDate.Year()
+	}
+	return movie.Year
+}
+
+func legacySeriesReleaseYear(series *models.Series) int {
+	if series == nil {
+		return 0
+	}
+	if series.FirstAirDate != nil && !series.FirstAirDate.IsZero() {
+		return series.FirstAirDate.Year()
+	}
+	return series.Year
+}
+
+func (h *Handler) legacyLibraryStreams(ctx context.Context, req vortexoSourcesRequest, releaseYear int) []providers.TorrentioStream {
+	if h == nil {
+		return nil
+	}
+
+	libraryStreams := h.vortexoWebDAVLibraryStreams(ctx, req)
+	if rdLibraryStreams := h.vortexoRealDebridLibraryStreams(ctx, req, releaseYear); len(rdLibraryStreams) > 0 {
+		libraryStreams = prependVortexoPreferredStreams(rdLibraryStreams, libraryStreams)
+	}
+	return libraryStreams
 }
 
 // GetMovieStreams handles GET /api/movies/{id}/streams
@@ -1283,6 +1363,18 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	// Log full metadata for debugging
 	log.Printf("[DEBUG] Movie %d (%s) metadata: %+v", id, movie.Title, movie.Metadata)
 
+	releaseYear := legacyMovieReleaseYear(movie)
+	libraryStreams := h.legacyLibraryStreams(ctx, vortexoSourcesRequest{
+		Type:   "movie",
+		Title:  movie.Title,
+		Year:   releaseYear,
+		TMDBID: movie.TMDBID,
+		IMDBID: imdbID,
+	}, releaseYear)
+	if len(libraryStreams) > 0 {
+		log.Printf("[STREAMS] Found %d library-backed movie streams for %s", len(libraryStreams), movie.Title)
+	}
+
 	// If this movie came from Balkan VOD import, expose only Balkan VOD streams
 	if isBalkanVODMovie(movie) {
 		apiStreams := buildBalkanVODStreams(movie)
@@ -1300,6 +1392,11 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if imdbID == "" {
+		if len(libraryStreams) > 0 {
+			log.Printf("[STREAMS] Returning %d library-backed movie streams for %d despite missing IMDB ID", len(libraryStreams), id)
+			respondLegacyStreams(w, cachedStreamObj, libraryStreams)
+			return
+		}
 		log.Printf("[ERROR] Movie %d (%s) has no IMDB ID in metadata - cannot fetch streams", id, movie.Title)
 		respondError(w, http.StatusBadRequest, "movie has no IMDB ID")
 		return
@@ -1320,16 +1417,17 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[STREAM-FETCH] Fetching streams for movie %d (%s) with IMDB ID: %s", id, movie.Title, imdbID)
 
 	// Extract release year for filtering
-	releaseYear := 0
-	if movie.ReleaseDate != nil && !movie.ReleaseDate.IsZero() {
-		releaseYear = movie.ReleaseDate.Year()
-	}
 	log.Printf("[STREAM-FETCH] Movie %s (%s) release year: %d", movie.Title, imdbID, releaseYear)
 
 	// Use the new year-aware method
 	providerStreams, err := h.streamProvider.GetMovieStreamsWithYear(imdbID, releaseYear)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get streams for movie %d (%s, %s): %v", id, movie.Title, imdbID, err)
+		if len(libraryStreams) > 0 {
+			log.Printf("[STREAMS] Returning %d library-backed movie streams for %d because provider lookup failed", len(libraryStreams), id)
+			respondLegacyStreams(w, cachedStreamObj, libraryStreams)
+			return
+		}
 		if cachedStreamObj != nil {
 			log.Printf("[STREAMS] Returning cached movie stream for %d because live provider lookup failed", id)
 			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
@@ -1538,6 +1636,11 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(libraryStreams) > 0 {
+		providerStreams = prependVortexoPreferredStreams(libraryStreams, providerStreams)
+		log.Printf("[STREAMS] Included %d library-backed movie streams in legacy response for %s", len(libraryStreams), movie.Title)
+	}
+
 	// Log stream count
 	log.Printf("[STREAMS] Returning %d streams for movie %s", len(providerStreams), movie.Title)
 
@@ -1566,19 +1669,7 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[SORT-UI] Sorting %d streams with order: %s, preference: %s", len(providerStreams), sortOrder, sortPrefer)
 	sortStreams(providerStreams, sortOrder, sortPrefer)
 
-	apiStreams := make([]map[string]interface{}, 0, len(providerStreams))
-
-	// Convert provider streams to API response format
 	for _, ps := range providerStreams {
-		// Extract codec from stream name if available (e.g., "x265", "x264", "HEVC")
-		codec := ""
-		name := strings.ToUpper(ps.Name)
-		if strings.Contains(name, "X265") || strings.Contains(name, "HEVC") {
-			codec = "HEVC"
-		} else if strings.Contains(name, "X264") || strings.Contains(name, "H264") {
-			codec = "H.264"
-		}
-
 		// Log individual stream with cached status
 		cachedStr := "⚡ CACHED"
 		if !ps.Cached {
@@ -1586,35 +1677,11 @@ func (h *Handler) GetMovieStreams(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("[STREAM-DETAIL] %s | %s | %s | Size: %.2f GB",
 			cachedStr, ps.Quality, ps.Title, float64(ps.Size)/(1024*1024*1024))
-
-		stream := map[string]interface{}{
-			"source":   ps.Source,
-			"quality":  ps.Quality,
-			"codec":    codec,
-			"url":      ps.URL,
-			"cached":   ps.Cached,
-			"seeds":    ps.Seeders,
-			"size_gb":  float64(ps.Size) / (1024 * 1024 * 1024),
-			"title":    ps.Title,
-			"name":     ps.Name,
-			"filename": ps.Title, // Use title as filename for display
-		}
-		apiStreams = append(apiStreams, stream)
 	}
-
-	// Prepend cached stream if available (for instant playback priority)
 	if cachedStreamObj != nil {
 		log.Printf("[STREAMS] ⚡ Adding cached stream as first option for instant playback")
-		allStreams := make([]interface{}, 0, len(apiStreams)+1)
-		allStreams = append(allStreams, cachedStreamObj)
-		for _, s := range apiStreams {
-			allStreams = append(allStreams, s)
-		}
-		respondJSON(w, http.StatusOK, allStreams)
-		return
 	}
-
-	respondJSON(w, http.StatusOK, apiStreams)
+	respondLegacyStreams(w, cachedStreamObj, providerStreams)
 }
 
 // GetEpisodeStreams handles GET /api/stream/series/{imdb_id}:{season}:{episode}
@@ -1673,9 +1740,27 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	libraryStreams := h.legacyLibraryStreams(ctx, vortexoSourcesRequest{
+		Type:        "episode",
+		Title:       firstNonEmptyString(series.Title, imdbID),
+		Year:        legacySeriesReleaseYear(series),
+		TMDBID:      series.TMDBID,
+		IMDBID:      imdbID,
+		Season:      season,
+		Episode:     episode,
+		ParentTitle: series.Title,
+	}, legacySeriesReleaseYear(series))
+	if len(libraryStreams) > 0 {
+		log.Printf("[STREAMS] Found %d library-backed series streams for %s S%02dE%02d", len(libraryStreams), imdbID, season, episode)
+	}
+
 	// Fetch live streams from providers
 	if h.streamProvider == nil {
 		log.Printf("Stream provider not configured")
+		if len(libraryStreams) > 0 {
+			respondLegacyStreams(w, cachedStreamObj, libraryStreams)
+			return
+		}
 		if cachedStreamObj != nil {
 			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
 			return
@@ -1688,6 +1773,11 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 	providerStreams, err := h.streamProvider.GetSeriesStreams(imdbID, season, episode)
 	if err != nil {
 		log.Printf("Failed to get streams for series %s S%02dE%02d: %v", imdbID, season, episode, err)
+		if len(libraryStreams) > 0 {
+			log.Printf("[STREAMS] Returning %d library-backed episode streams for %s S%02dE%02d because provider lookup failed", len(libraryStreams), imdbID, season, episode)
+			respondLegacyStreams(w, cachedStreamObj, libraryStreams)
+			return
+		}
 		if cachedStreamObj != nil {
 			log.Printf("[STREAMS] Returning cached series stream for %s S%02dE%02d because live provider lookup failed", imdbID, season, episode)
 			respondJSON(w, http.StatusOK, []interface{}{cachedStreamObj})
@@ -1698,6 +1788,11 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Found %d streams for series %s S%02dE%02d", len(providerStreams), imdbID, season, episode)
+
+	if len(libraryStreams) > 0 {
+		providerStreams = prependVortexoPreferredStreams(libraryStreams, providerStreams)
+		log.Printf("[STREAMS] Included %d library-backed series streams in legacy response for %s S%02dE%02d", len(libraryStreams), imdbID, season, episode)
+	}
 
 	// Apply user's sorting preferences to streams
 	sortOrder := "quality,size,seeders" // default
@@ -1714,44 +1809,7 @@ func (h *Handler) GetEpisodeStreams(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[SORT-UI] Sorting %d series streams with order: %s, preference: %s", len(providerStreams), sortOrder, sortPrefer)
 	sortStreams(providerStreams, sortOrder, sortPrefer)
 
-	// Convert provider streams to API response format
-	apiStreams := make([]map[string]interface{}, 0, len(providerStreams))
-	for _, ps := range providerStreams {
-		// Extract codec from stream name if available
-		codec := ""
-		name := strings.ToUpper(ps.Name)
-		if strings.Contains(name, "X265") || strings.Contains(name, "HEVC") {
-			codec = "HEVC"
-		} else if strings.Contains(name, "X264") || strings.Contains(name, "H264") {
-			codec = "H.264"
-		}
-
-		stream := map[string]interface{}{
-			"source":   ps.Source,
-			"quality":  ps.Quality,
-			"codec":    codec,
-			"url":      ps.URL,
-			"cached":   ps.Cached,
-			"seeds":    ps.Seeders,
-			"size_gb":  float64(ps.Size) / (1024 * 1024 * 1024),
-			"title":    ps.Title,
-			"name":     ps.Name,
-			"filename": ps.Title, // Use title as filename for display
-		}
-		apiStreams = append(apiStreams, stream)
-	}
-
-	if cachedStreamObj != nil {
-		allStreams := make([]interface{}, 0, len(apiStreams)+1)
-		allStreams = append(allStreams, cachedStreamObj)
-		for _, s := range apiStreams {
-			allStreams = append(allStreams, s)
-		}
-		respondJSON(w, http.StatusOK, allStreams)
-		return
-	}
-
-	respondJSON(w, http.StatusOK, apiStreams)
+	respondLegacyStreams(w, cachedStreamObj, providerStreams)
 }
 
 // PlayMovie handles GET /api/movies/{id}/play
