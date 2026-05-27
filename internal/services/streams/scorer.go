@@ -333,10 +333,10 @@ func parseSource(upperName string) string {
 
 // parseCodec extracts video codec from torrent name
 func parseCodec(upperName string) string {
-	if strings.Contains(upperName, "H.265") || strings.Contains(upperName, "H265") || strings.Contains(upperName, "HEVC") {
+	if strings.Contains(upperName, "H.265") || strings.Contains(upperName, "H265") || strings.Contains(upperName, "HEVC") || strings.Contains(upperName, "X265") {
 		return "HEVC"
 	}
-	if strings.Contains(upperName, "H.264") || strings.Contains(upperName, "H264") || strings.Contains(upperName, "AVC") {
+	if strings.Contains(upperName, "H.264") || strings.Contains(upperName, "H264") || strings.Contains(upperName, "AVC") || strings.Contains(upperName, "X264") {
 		return "AVC"
 	}
 	if strings.Contains(upperName, "AV1") {

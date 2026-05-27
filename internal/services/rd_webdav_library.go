@@ -21,6 +21,7 @@ import (
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
@@ -35,6 +36,7 @@ var (
 	rdWebDAVTMDBPattern        = regexp.MustCompile(`(?i)[\[\{\(]tmdb[-_:\s]?(\d+)[\]\}\)]`)
 	rdWebDAVUnsafePathPattern  = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
 	rdWebDAVMultiSpacePattern  = regexp.MustCompile(`\s+`)
+	rdWebDAVResolutionPattern  = regexp.MustCompile(`(?i)(^|[^a-z0-9])(2160p|1080p|720p|576p|480p|4k|uhd|sd)([^a-z0-9]|$)`)
 	rdWebDAVVideoExtensions    = map[string]bool{".mkv": true, ".mp4": true, ".m4v": true, ".avi": true, ".mov": true, ".wmv": true, ".flv": true, ".webm": true, ".ts": true, ".m2ts": true, ".mpg": true, ".mpeg": true}
 	rdWebDAVScannerSkipFolders = map[string]bool{".cache": true, ".git": true, ".trash": true, "@eadir": true, "sample": true, "samples": true}
 )
@@ -67,15 +69,21 @@ type RDWebDAVLibrarySummary struct {
 }
 
 type rdWebDAVMediaCandidate struct {
-	MediaType  string
-	Title      string
-	Year       int
-	Season     int
-	Episode    int
-	TMDBID     int
-	SourcePath string
-	SizeBytes  int64
-	Ext        string
+	MediaType   string
+	Title       string
+	Year        int
+	Season      int
+	Episode     int
+	TMDBID      int
+	SourcePath  string
+	SizeBytes   int64
+	Ext         string
+	Resolution  string
+	SourceType  string
+	Codec       string
+	HDRType     string
+	AudioFormat string
+	QualityTags []string
 }
 
 type synchronizedBuffer struct {
@@ -511,6 +519,10 @@ func parseRDWebDAVMediaFile(sourcePath string) (rdWebDAVMediaCandidate, bool) {
 	parent := filepath.Base(filepath.Dir(sourcePath))
 	grandparent := filepath.Base(filepath.Dir(filepath.Dir(sourcePath)))
 	tmdbID := extractRDWebDAVTMDBID(base + " " + parent + " " + grandparent)
+	qualityName := strings.TrimSpace(grandparent + " " + parent + " " + base)
+	quality := streams.ParseQualityFromTorrentName(qualityName)
+	resolution := rdWebDAVVisibleResolution(qualityName, quality.Resolution)
+	qualityTags := rdWebDAVQualityTags(qualityName, quality)
 
 	candidates := []string{base, parent + " " + base, grandparent + " " + parent + " " + base}
 	for _, name := range candidates {
@@ -523,20 +535,82 @@ func parseRDWebDAVMediaFile(sourcePath string) (rdWebDAVMediaCandidate, bool) {
 			mediaType = "episode"
 		}
 		out := rdWebDAVMediaCandidate{
-			MediaType:  mediaType,
-			Title:      parsed.Title,
-			Year:       parsed.Year,
-			Season:     parsed.Season,
-			Episode:    parsed.Episode,
-			TMDBID:     tmdbID,
-			SourcePath: sourcePath,
-			Ext:        strings.ToLower(filepath.Ext(sourcePath)),
+			MediaType:   mediaType,
+			Title:       parsed.Title,
+			Year:        parsed.Year,
+			Season:      parsed.Season,
+			Episode:     parsed.Episode,
+			TMDBID:      tmdbID,
+			SourcePath:  sourcePath,
+			Ext:         strings.ToLower(filepath.Ext(sourcePath)),
+			Resolution:  resolution,
+			SourceType:  quality.Source,
+			Codec:       quality.Codec,
+			HDRType:     quality.HDRType,
+			AudioFormat: quality.AudioFormat,
+			QualityTags: qualityTags,
 		}
 		if out.MediaType != "" && out.Title != "" {
 			return out, true
 		}
 	}
 	return rdWebDAVMediaCandidate{}, false
+}
+
+func rdWebDAVQualityTags(sourceName string, quality streams.StreamQuality) []string {
+	tags := make([]string, 0, 5)
+	seen := map[string]bool{}
+	appendRDWebDAVQualityTag(&tags, seen, rdWebDAVVisibleResolution(sourceName, quality.Resolution))
+	appendRDWebDAVQualityTag(&tags, seen, canonicalRDWebDAVQualityTag(quality.Source))
+	appendRDWebDAVQualityTag(&tags, seen, canonicalRDWebDAVQualityTag(quality.Codec))
+	if quality.HDRType != "" && quality.HDRType != "SDR" {
+		appendRDWebDAVQualityTag(&tags, seen, canonicalRDWebDAVQualityTag(quality.HDRType))
+	}
+	appendRDWebDAVQualityTag(&tags, seen, canonicalRDWebDAVQualityTag(quality.AudioFormat))
+	return tags
+}
+
+func rdWebDAVVisibleResolution(sourceName, resolution string) string {
+	if resolution == "" || resolution == "SD" {
+		if rdWebDAVResolutionPattern.MatchString(sourceName) {
+			return resolution
+		}
+		return ""
+	}
+	return resolution
+}
+
+func appendRDWebDAVQualityTag(tags *[]string, seen map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	value = safePathComponent(value)
+	key := strings.ToLower(value)
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	*tags = append(*tags, value)
+}
+
+func canonicalRDWebDAVQualityTag(value string) string {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "REMUX":
+		return "Remux"
+	case "BLURAY", "BLU-RAY":
+		return "BluRay"
+	case "WEBDL", "WEB-DL":
+		return "WEB-DL"
+	case "WEBRIP":
+		return "WEBRip"
+	case "DVDRIP":
+		return "DVDRip"
+	case "DTS-HD.MA":
+		return "DTS-HD MA"
+	default:
+		return strings.TrimSpace(value)
+	}
 }
 
 func (b *RDWebDAVLibraryBuilder) importWebDAVMovie(ctx context.Context, cfg *isettings.Settings, candidate rdWebDAVMediaCandidate, libraryPath string) (bool, string, error) {
@@ -760,7 +834,7 @@ func movieSymlinkPath(libraryPath string, movie *models.Movie, candidate rdWebDA
 		year = candidate.Year
 	}
 	folder := fmt.Sprintf("%s (%d) {tmdb-%d}", safePathComponent(movie.Title), year, movie.TMDBID)
-	file := fmt.Sprintf("%s (%d) {tmdb-%d}%s", safePathComponent(movie.Title), year, movie.TMDBID, candidate.Ext)
+	file := fmt.Sprintf("%s (%d)%s {tmdb-%d}%s", safePathComponent(movie.Title), year, rdWebDAVQualitySuffix(candidate), movie.TMDBID, candidate.Ext)
 	return filepath.Join(libraryPath, "Movies", folder, file)
 }
 
@@ -778,9 +852,16 @@ func episodeSymlinkPath(libraryPath string, series *models.Series, episode *mode
 	if episodeTitle == "" {
 		episodeTitle = fmt.Sprintf("Episode %d", candidate.Episode)
 	}
-	file := fmt.Sprintf("%s - S%02dE%02d - %s", safePathComponent(series.Title), candidate.Season, candidate.Episode, episodeTitle)
+	file := fmt.Sprintf("%s - S%02dE%02d - %s%s", safePathComponent(series.Title), candidate.Season, candidate.Episode, episodeTitle, rdWebDAVQualitySuffix(candidate))
 	file += candidate.Ext
 	return filepath.Join(libraryPath, "TV", seriesFolder, fmt.Sprintf("Season %02d", candidate.Season), file)
+}
+
+func rdWebDAVQualitySuffix(candidate rdWebDAVMediaCandidate) string {
+	if len(candidate.QualityTags) == 0 {
+		return ""
+	}
+	return " [" + safePathComponent(strings.Join(candidate.QualityTags, " ")) + "]"
 }
 
 func seriesPlexIDTag(series *models.Series) string {
@@ -957,6 +1038,12 @@ func mergeRDWebDAVMetadata(metadata models.Metadata, candidate rdWebDAVMediaCand
 	metadata["rd_webdav_source_path"] = candidate.SourcePath
 	metadata["rd_webdav_symlink_path"] = linkPath
 	metadata["rd_webdav_size_bytes"] = candidate.SizeBytes
+	metadata["rd_webdav_quality_tags"] = candidate.QualityTags
+	metadata["rd_webdav_resolution"] = candidate.Resolution
+	metadata["rd_webdav_source_type"] = canonicalRDWebDAVQualityTag(candidate.SourceType)
+	metadata["rd_webdav_codec"] = canonicalRDWebDAVQualityTag(candidate.Codec)
+	metadata["rd_webdav_hdr_type"] = canonicalRDWebDAVQualityTag(candidate.HDRType)
+	metadata["rd_webdav_audio_format"] = canonicalRDWebDAVQualityTag(candidate.AudioFormat)
 	metadata["rd_webdav_last_seen"] = time.Now().Format(time.RFC3339)
 	return metadata
 }

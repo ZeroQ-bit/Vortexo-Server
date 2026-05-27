@@ -11,7 +11,7 @@ import (
 )
 
 func TestParseRDWebDAVMediaFileEpisodeWithYear(t *testing.T) {
-	candidate, ok := parseRDWebDAVMediaFile("/mnt/rd/shows/M.I.A.2026.S01/M.I.A.2026.S01E01.Revenge.720p-PW.mkv")
+	candidate, ok := parseRDWebDAVMediaFile("/mnt/rd/shows/M.I.A.2026.S01/M.I.A.2026.S01E01.Revenge.720p.WEB-DL.x264-PW.mkv")
 	if !ok {
 		t.Fatal("expected parser to match episode file")
 	}
@@ -24,10 +24,14 @@ func TestParseRDWebDAVMediaFileEpisodeWithYear(t *testing.T) {
 	if candidate.Year != 2026 || candidate.Season != 1 || candidate.Episode != 1 {
 		t.Fatalf("unexpected episode parse: year=%d season=%d episode=%d", candidate.Year, candidate.Season, candidate.Episode)
 	}
+	expectedTags := []string{"720p", "WEB-DL", "AVC"}
+	if !slices.Equal(candidate.QualityTags, expectedTags) {
+		t.Fatalf("expected quality tags %v, got %v", expectedTags, candidate.QualityTags)
+	}
 }
 
 func TestParseRDWebDAVMediaFileMovie(t *testing.T) {
-	candidate, ok := parseRDWebDAVMediaFile("/mnt/rd/movies/The.Muppet.Movie.1979.1080p.BluRay.mkv")
+	candidate, ok := parseRDWebDAVMediaFile("/mnt/rd/movies/The.Muppet.Movie.1979.1080p.BluRay.x265.mkv")
 	if !ok {
 		t.Fatal("expected parser to match movie file")
 	}
@@ -36,6 +40,10 @@ func TestParseRDWebDAVMediaFileMovie(t *testing.T) {
 	}
 	if candidate.Title != "the muppet movie" || candidate.Year != 1979 {
 		t.Fatalf("unexpected movie parse: title=%q year=%d", candidate.Title, candidate.Year)
+	}
+	expectedTags := []string{"1080p", "BluRay", "HEVC"}
+	if !slices.Equal(candidate.QualityTags, expectedTags) {
+		t.Fatalf("expected quality tags %v, got %v", expectedTags, candidate.QualityTags)
 	}
 }
 
@@ -164,14 +172,29 @@ func TestEpisodeSymlinkPathPrefersTVDBShowID(t *testing.T) {
 		Metadata: models.Metadata{"tvdb_id": 123456},
 	}
 	episode := &models.Episode{TMDBID: 6061110, Title: "Revenge"}
-	candidate := rdWebDAVMediaCandidate{Season: 1, Episode: 1, Ext: ".mkv"}
+	candidate := rdWebDAVMediaCandidate{Season: 1, Episode: 1, Ext: ".mkv", QualityTags: []string{"720p", "WEB-DL"}}
 
 	path := episodeSymlinkPath("/app/rd-library", series, episode, candidate)
 	if filepath.Base(filepath.Dir(filepath.Dir(path))) != "M.I.A (2026) {tvdb-123456}" {
 		t.Fatalf("unexpected series symlink folder: %s", filepath.Base(filepath.Dir(filepath.Dir(path))))
 	}
-	if filepath.Base(path) != "M.I.A - S01E01 - Revenge.mkv" {
+	if filepath.Base(path) != "M.I.A - S01E01 - Revenge [720p WEB-DL].mkv" {
 		t.Fatalf("unexpected episode symlink filename: %s", filepath.Base(path))
+	}
+}
+
+func TestMovieSymlinkPathIncludesQualityTags(t *testing.T) {
+	movie := &models.Movie{TMDBID: 122, Title: "The Return of the King", Year: 2003}
+	candidate := rdWebDAVMediaCandidate{
+		Year:        2003,
+		Ext:         ".mkv",
+		QualityTags: []string{"2160p", "Remux", "HEVC", "DV", "Atmos"},
+	}
+
+	path := movieSymlinkPath("/app/rd-library", movie, candidate)
+	expected := "The Return of the King (2003) [2160p Remux HEVC DV Atmos] {tmdb-122}.mkv"
+	if filepath.Base(path) != expected {
+		t.Fatalf("unexpected movie symlink filename: %s", filepath.Base(path))
 	}
 }
 
