@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 func TestParseRDWebDAVMediaFileEpisodeWithYear(t *testing.T) {
@@ -98,6 +99,46 @@ func TestBuildRDWebDAVRcloneMountArgsIncludesAllowOther(t *testing.T) {
 	}
 	if !slices.Contains(args, "--allow-non-empty") {
 		t.Fatalf("expected rclone mount args to include --allow-non-empty, got %v", args)
+	}
+}
+
+func TestRDWebDAVMountFingerprintNormalizesTrailingSlash(t *testing.T) {
+	first := rdWebDAVMountFingerprint(&isettings.Settings{
+		RDWebDAVURL:      "https://webdav.torbox.app/",
+		RDWebDAVUsername: "user@example.com",
+		RDWebDAVPassword: "secret",
+	})
+	second := rdWebDAVMountFingerprint(&isettings.Settings{
+		RDWebDAVURL:      "https://webdav.torbox.app",
+		RDWebDAVUsername: "user@example.com",
+		RDWebDAVPassword: "secret",
+	})
+	if first == "" || first != second {
+		t.Fatalf("expected equivalent fingerprints, got %q and %q", first, second)
+	}
+	third := rdWebDAVMountFingerprint(&isettings.Settings{
+		RDWebDAVURL:      "https://dav.real-debrid.com",
+		RDWebDAVUsername: "user@example.com",
+		RDWebDAVPassword: "secret",
+	})
+	if third == first {
+		t.Fatal("expected different WebDAV URLs to produce different fingerprints")
+	}
+}
+
+func TestRDWebDAVMountMarkerMatches(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mount.marker")
+	if rdWebDAVMountMarkerMatches(path, "abc") {
+		t.Fatal("missing marker should not match")
+	}
+	if err := os.WriteFile(path, []byte("abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !rdWebDAVMountMarkerMatches(path, "abc") {
+		t.Fatal("expected marker to match trimmed fingerprint")
+	}
+	if rdWebDAVMountMarkerMatches(path, "def") {
+		t.Fatal("unexpected marker match")
 	}
 }
 

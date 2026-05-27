@@ -3,6 +3,8 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -121,15 +123,15 @@ func (b *RDWebDAVLibraryBuilder) UpdateTMDBClient(tmdbClient *TMDBClient) {
 func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySummary, error) {
 	summary := &RDWebDAVLibrarySummary{}
 	if b == nil || b.movieStore == nil || b.seriesStore == nil || b.episodeStore == nil {
-		return summary, fmt.Errorf("RD WebDAV library builder is not initialized")
+		return summary, fmt.Errorf("debrid WebDAV library builder is not initialized")
 	}
 	cfg := b.currentSettings()
 	if cfg == nil || !cfg.RDWebDAVLibraryEnabled {
-		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, 0, 0, "RD WebDAV library scan disabled")
+		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, 0, 0, "Debrid WebDAV library scan disabled")
 		return summary, nil
 	}
 	if b.tmdbClient == nil || strings.TrimSpace(cfg.TMDBAPIKey) == "" {
-		return summary, fmt.Errorf("TMDB API key is required for RD WebDAV library matching")
+		return summary, fmt.Errorf("TMDB API key is required for debrid WebDAV library matching")
 	}
 
 	mountPath := cleanConfiguredPath(cfg.RDWebDAVMountPath, "/mnt/rd")
@@ -140,7 +142,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		}
 	}
 	if err := ensureReadableDir(mountPath); err != nil {
-		return summary, fmt.Errorf("RD WebDAV mount path is not readable: %w", err)
+		return summary, fmt.Errorf("debrid WebDAV mount path is not readable: %w", err)
 	}
 	if err := os.MkdirAll(libraryPath, 0o755); err != nil {
 		return summary, fmt.Errorf("create clean library path: %w", err)
@@ -152,7 +154,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 	}
 	summary.VideoFiles = len(files)
 	if len(files) == 0 {
-		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, 0, 0, "No video files found in RD WebDAV mount")
+		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, 0, 0, "No video files found in debrid WebDAV mount")
 		return summary, nil
 	}
 
@@ -223,7 +225,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		ServiceRDWebDAVLibrary,
 		len(files),
 		len(files),
-		fmt.Sprintf("RD WebDAV scan complete: %d movies, %d episodes, %d symlinks", summary.MoviesAdded+summary.MoviesUpdated, summary.EpisodesAdded+summary.EpisodesUpdated, summary.SymlinksCreated+summary.SymlinksUpdated),
+		fmt.Sprintf("Debrid WebDAV scan complete: %d movies, %d episodes, %d symlinks", summary.MoviesAdded+summary.MoviesUpdated, summary.EpisodesAdded+summary.EpisodesUpdated, summary.SymlinksCreated+summary.SymlinksUpdated),
 	)
 	log.Printf("[RD WebDAV] Scan complete: %+v", summary)
 	return summary, nil
@@ -237,11 +239,8 @@ func (b *RDWebDAVLibraryBuilder) currentSettings() *isettings.Settings {
 }
 
 func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *isettings.Settings, mountPath string) error {
-	if isRDWebDAVRcloneMountedPath(mountPath) {
-		return nil
-	}
 	if strings.TrimSpace(cfg.RDWebDAVUsername) == "" || strings.TrimSpace(cfg.RDWebDAVPassword) == "" {
-		return fmt.Errorf("RD WebDAV rclone mount is enabled but username/password are missing")
+		return fmt.Errorf("debrid WebDAV rclone mount is enabled but username/password are missing")
 	}
 	if _, err := exec.LookPath("rclone"); err != nil {
 		return fmt.Errorf("rclone is not installed in this container: %w", err)
@@ -252,9 +251,28 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 	if err := os.MkdirAll(mountPath, 0o755); err != nil {
 		return fmt.Errorf("create rclone mount path: %w", err)
 	}
+	if err := os.MkdirAll("/app/cache", 0o700); err != nil {
+		return fmt.Errorf("create rclone config dir: %w", err)
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	markerPath := filepath.Join("/app/cache", "rclone-rd-webdav.mount")
+	fingerprint := rdWebDAVMountFingerprint(cfg)
+	if isRDWebDAVRcloneMountedPath(mountPath) {
+		if rdWebDAVMountMarkerMatches(markerPath, fingerprint) {
+			return nil
+		}
+		log.Printf("[RD WebDAV] Existing rclone mount at %s was created for different WebDAV settings; remounting", mountPath)
+		if b.mountCmd != nil && b.mountCmd.Process != nil {
+			_ = b.mountCmd.Process.Kill()
+			b.mountCmd = nil
+		}
+		if err := unmountRDWebDAVPath(ctx, mountPath); err != nil {
+			return err
+		}
+		_ = os.Remove(markerPath)
+	}
 	if b.mountCmd != nil && b.mountCmd.Process != nil {
 		if isRDWebDAVRcloneMountedPath(mountPath) {
 			return nil
@@ -267,9 +285,6 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		return err
 	}
 	configPath := filepath.Join("/app/cache", "rclone-rd-webdav.conf")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
-		return fmt.Errorf("create rclone config dir: %w", err)
-	}
 	config := fmt.Sprintf("[%s]\ntype = webdav\nurl = %s\nvendor = other\nuser = %s\npass = %s\n", rdWebDAVRemoteName, strings.TrimSpace(cfg.RDWebDAVURL), strings.TrimSpace(cfg.RDWebDAVUsername), obscuredPass)
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		return fmt.Errorf("write rclone config: %w", err)
@@ -303,6 +318,7 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 	deadline := time.Now().Add(rdWebDAVMountTimeout)
 	for time.Now().Before(deadline) {
 		if isRDWebDAVRcloneMountedPath(mountPath) {
+			_ = os.WriteFile(markerPath, []byte(fingerprint+"\n"), 0o600)
 			log.Printf("[RD WebDAV] rclone mounted %s", mountPath)
 			return nil
 		}
@@ -318,6 +334,63 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("rclone mount did not become ready at %s after %s; recent output: %s", mountPath, rdWebDAVMountTimeout, compactRcloneOutput(rcloneOutput.String()))
+}
+
+func rdWebDAVMountFingerprint(cfg *isettings.Settings) string {
+	if cfg == nil {
+		return ""
+	}
+	parts := []string{
+		strings.TrimRight(strings.TrimSpace(cfg.RDWebDAVURL), "/"),
+		strings.TrimSpace(cfg.RDWebDAVUsername),
+		strings.TrimSpace(cfg.RDWebDAVPassword),
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+func rdWebDAVMountMarkerMatches(path, expected string) bool {
+	if expected == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == expected
+}
+
+func unmountRDWebDAVPath(ctx context.Context, mountPath string) error {
+	commands := [][]string{
+		{"fusermount3", "-uz", mountPath},
+		{"fusermount", "-uz", mountPath},
+		{"umount", "-l", mountPath},
+	}
+	var lastErr error
+	for _, args := range commands {
+		if _, err := exec.LookPath(args[0]); err != nil {
+			continue
+		}
+		cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		output, err := exec.CommandContext(cmdCtx, args[0], args[1:]...).CombinedOutput()
+		cancel()
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = fmt.Errorf("%s failed: %w: %s", args[0], err, compactRcloneOutput(string(output)))
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !isRDWebDAVRcloneMountedPath(mountPath) {
+			return nil
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("failed to unmount stale WebDAV rclone mount at %s: %w", mountPath, lastErr)
+	}
+	return fmt.Errorf("failed to unmount stale WebDAV rclone mount at %s", mountPath)
 }
 
 func buildRDWebDAVRcloneMountArgs(configPath, mountPath string) []string {

@@ -574,7 +574,7 @@ func main() {
 		tmdbClient,
 		func() *settings.Settings { return settingsManager.Get() },
 	)
-	log.Println("✓ Real-Debrid WebDAV library builder initialized")
+	log.Println("✓ Debrid WebDAV library builder initialized")
 
 	plexArtworkService := services.NewPlexArtworkService(plexArtworkStore)
 	log.Println("✓ Plex artwork cache service initialized")
@@ -812,10 +812,10 @@ func main() {
 		}
 	}()
 
-	// Worker: RD WebDAV clean symlink library (configurable interval)
+	// Worker: debrid WebDAV clean symlink library (configurable interval)
 	go func() {
 		defaultInterval := 1 * time.Hour
-		log.Printf("🔗 RD WebDAV Library Worker: Starting (default interval: %v)", defaultInterval)
+		log.Printf("🔗 Debrid WebDAV Library Worker: Starting (default interval: %v)", defaultInterval)
 
 		timer := time.NewTimer(90 * time.Second)
 		defer timer.Stop()
@@ -823,7 +823,7 @@ func main() {
 		for {
 			select {
 			case <-workerCtx.Done():
-				log.Println("🛑 RD WebDAV Library Worker: Shutting down")
+				log.Println("🛑 Debrid WebDAV Library Worker: Shutting down")
 				return
 			case <-timer.C:
 			}
@@ -839,7 +839,7 @@ func main() {
 					_, err := rdWebDAVLibrary.Build(workerCtx)
 					services.GlobalScheduler.MarkComplete(services.ServiceRDWebDAVLibrary, err, nextInterval)
 					if err != nil {
-						log.Printf("❌ RD WebDAV library scan error: %v", err)
+						log.Printf("❌ Debrid WebDAV library scan error: %v", err)
 					}
 				}
 			}

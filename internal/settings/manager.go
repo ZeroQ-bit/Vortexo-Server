@@ -147,10 +147,10 @@ type Settings struct {
 	DMMLibraryImportEnabled      bool   `json:"dmm_library_import_enabled"`       // Enable full DMM/hashlists library import once the importer is available
 	DMMLibraryFillMissingEnabled bool   `json:"dmm_library_fill_missing_enabled"` // Fill missing streams for existing library items from DMM hashlists
 
-	// Real-Debrid WebDAV Library Settings
+	// Debrid WebDAV Library Settings
 	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`            // Scan mounted RD WebDAV files into the local library
 	RDWebDAVMountEnabled            bool   `json:"rd_webdav_mount_enabled"`              // Let the server start rclone mount
-	RDWebDAVURL                     string `json:"rd_webdav_url"`                        // Real-Debrid WebDAV endpoint
+	RDWebDAVURL                     string `json:"rd_webdav_url"`                        // Debrid WebDAV endpoint
 	RDWebDAVUsername                string `json:"rd_webdav_username"`                   // WebDAV username for rclone
 	RDWebDAVPassword                string `json:"rd_webdav_password"`                   // WebDAV password/token for rclone
 	RDWebDAVMountPath               string `json:"rd_webdav_mount_path"`                 // Mounted RD filesystem path

@@ -1728,6 +1728,9 @@ export default function Settings() {
     if (name === "rd_library_sync") {
       return "Real-Debrid Library Sync";
     }
+    if (name === "rd_webdav_library") {
+      return "Debrid WebDAV Library";
+    }
     return name
       .split("_")
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -2836,10 +2839,10 @@ export default function Settings() {
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-medium text-white mb-2">
-                  Real-Debrid WebDAV Library
+                  Debrid WebDAV Library
                 </h3>
                 <p className="text-sm text-slate-400">
-                  Mount Real-Debrid with rclone, scan the WebDAV files, and
+                  Mount Real-Debrid, TorBox, or another WebDAV debrid service with rclone, scan the files, and
                   build a clean TMDB-tagged symlink library for movies and TV.
                 </p>
               </div>
@@ -2853,10 +2856,10 @@ export default function Settings() {
               >
                 <div>
                   <div className="text-sm font-semibold text-white">
-                    Build Library From RD WebDAV
+                    Build Library From Debrid WebDAV
                   </div>
                   <div className="text-xs text-slate-400 mt-1">
-                    Only files found in the mounted Real-Debrid WebDAV folder
+                    Only files found in the mounted debrid WebDAV folder
                     are imported, then linked into the clean library path.
                   </div>
                 </div>
@@ -2878,7 +2881,7 @@ export default function Settings() {
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
                       Requires Docker FUSE permissions. If disabled, mount
-                      Real-Debrid yourself and keep the mount path below.
+                      the WebDAV service yourself and keep the mount path below.
                     </div>
                   </div>
                   <input
@@ -2934,7 +2937,7 @@ export default function Settings() {
                         updateSetting("rd_webdav_username", e.target.value)
                       }
                       className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      placeholder="Real-Debrid WebDAV username"
+                      placeholder="WebDAV username or TorBox email"
                     />
                   </div>
                   <div>
@@ -2948,7 +2951,7 @@ export default function Settings() {
                         updateSetting("rd_webdav_password", e.target.value)
                       }
                       className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      placeholder="Real-Debrid WebDAV password or token"
+                      placeholder="WebDAV password or token"
                     />
                   </div>
                   <div>
@@ -3000,7 +3003,7 @@ export default function Settings() {
                       Clean Dead Symlinks
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
-                      Remove links whose Real-Debrid WebDAV target disappeared.
+                      Remove links whose WebDAV target disappeared.
                     </div>
                   </div>
                 </label>
@@ -3024,7 +3027,7 @@ export default function Settings() {
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
                       Keep the library centered on files that exist in your
-                      Real-Debrid WebDAV mount.
+                      debrid WebDAV mount.
                     </div>
                   </div>
                 </label>
@@ -3032,7 +3035,7 @@ export default function Settings() {
 
               {settings.rd_webdav_library_enabled && (
                 <div className="rounded-lg border border-green-700/50 bg-green-900/20 p-4 text-sm text-green-100">
-                  The RD WebDAV Library service will create Movies and TV
+                  The Debrid WebDAV Library service will create Movies and TV
                   symlink folders with TMDB IDs, then mark matched movies and
                   episodes available in Vortexo Server.
                 </div>

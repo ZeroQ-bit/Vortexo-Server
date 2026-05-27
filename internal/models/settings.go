@@ -73,7 +73,7 @@ type SettingsResponse struct {
 	DMMLibraryImportEnabled      bool   `json:"dmm_library_import_enabled"`
 	DMMLibraryFillMissingEnabled bool   `json:"dmm_library_fill_missing_enabled"`
 
-	// Real-Debrid WebDAV Library
+	// Debrid WebDAV Library
 	RDWebDAVLibraryEnabled          bool   `json:"rd_webdav_library_enabled"`
 	RDWebDAVMountEnabled            bool   `json:"rd_webdav_mount_enabled"`
 	RDWebDAVURL                     string `json:"rd_webdav_url"`
