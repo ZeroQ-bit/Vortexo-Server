@@ -192,7 +192,7 @@ func TestMovieSymlinkPathIncludesQualityTags(t *testing.T) {
 	}
 
 	path := movieSymlinkPath("/app/rd-library", movie, candidate)
-	expected := "The Return of the King (2003) [2160p Remux HEVC DV Atmos] {tmdb-122}.mkv"
+	expected := "The Return of the King (2003) {tmdb-122} [2160p Remux HEVC DV Atmos].mkv"
 	if filepath.Base(path) != expected {
 		t.Fatalf("unexpected movie symlink filename: %s", filepath.Base(path))
 	}

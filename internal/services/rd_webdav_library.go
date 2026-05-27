@@ -834,7 +834,7 @@ func movieSymlinkPath(libraryPath string, movie *models.Movie, candidate rdWebDA
 		year = candidate.Year
 	}
 	folder := fmt.Sprintf("%s (%d) {tmdb-%d}", safePathComponent(movie.Title), year, movie.TMDBID)
-	file := fmt.Sprintf("%s (%d)%s {tmdb-%d}%s", safePathComponent(movie.Title), year, rdWebDAVQualitySuffix(candidate), movie.TMDBID, candidate.Ext)
+	file := fmt.Sprintf("%s (%d) {tmdb-%d}%s%s", safePathComponent(movie.Title), year, movie.TMDBID, rdWebDAVQualitySuffix(candidate), candidate.Ext)
 	return filepath.Join(libraryPath, "Movies", folder, file)
 }
 
