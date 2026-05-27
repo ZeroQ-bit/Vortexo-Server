@@ -150,6 +150,15 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		}
 	}
 	if err := ensureReadableDir(mountPath); err != nil {
+		if cfg.RDWebDAVMountEnabled && isRecoverableRDWebDAVReadError(err) {
+			if remountErr := b.remountRcloneMount(ctx, cfg, mountPath, err); remountErr != nil {
+				return summary, remountErr
+			}
+		} else {
+			return summary, fmt.Errorf("debrid WebDAV mount path is not readable: %w", err)
+		}
+	}
+	if err := ensureReadableDir(mountPath); err != nil {
 		return summary, fmt.Errorf("debrid WebDAV mount path is not readable: %w", err)
 	}
 	if err := os.MkdirAll(libraryPath, 0o755); err != nil {
@@ -342,6 +351,27 @@ func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *ise
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("rclone mount did not become ready at %s after %s; recent output: %s", mountPath, rdWebDAVMountTimeout, compactRcloneOutput(rcloneOutput.String()))
+}
+
+func (b *RDWebDAVLibraryBuilder) remountRcloneMount(ctx context.Context, cfg *isettings.Settings, mountPath string, cause error) error {
+	log.Printf("[RD WebDAV] rclone mount at %s became unreadable: %v; remounting", mountPath, cause)
+	b.mu.Lock()
+	if b.mountCmd != nil && b.mountCmd.Process != nil {
+		_ = b.mountCmd.Process.Kill()
+		b.mountCmd = nil
+	}
+	b.mu.Unlock()
+	_ = os.Remove(filepath.Join("/app/cache", "rclone-rd-webdav.mount"))
+	if err := unmountRDWebDAVPath(ctx, mountPath); err != nil {
+		log.Printf("[RD WebDAV] Stale rclone mount cleanup failed before remount: %v", err)
+	}
+	if err := b.ensureRcloneMount(ctx, cfg, mountPath); err != nil {
+		return fmt.Errorf("remount debrid WebDAV after unreadable mount: %w", err)
+	}
+	if err := ensureReadableDir(mountPath); err != nil {
+		return fmt.Errorf("debrid WebDAV mount path is not readable after remount: %w", err)
+	}
+	return nil
 }
 
 func rdWebDAVMountFingerprint(cfg *isettings.Settings) string {
@@ -1111,6 +1141,16 @@ func ensureReadableDir(path string) error {
 	}
 	_, err = os.ReadDir(path)
 	return err
+}
+
+func isRecoverableRDWebDAVReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "input/output error") ||
+		strings.Contains(message, "transport endpoint is not connected") ||
+		strings.Contains(message, "device not configured")
 }
 
 func extractRDWebDAVTMDBID(value string) int {

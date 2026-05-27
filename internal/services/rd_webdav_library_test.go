@@ -164,6 +164,30 @@ func TestRDWebDAVMountEntryAcceptsRcloneFuseMount(t *testing.T) {
 	}
 }
 
+func TestRecoverableRDWebDAVReadError(t *testing.T) {
+	recoverable := []error{
+		os.ErrPermission,
+	}
+	if isRecoverableRDWebDAVReadError(recoverable[0]) {
+		t.Fatal("plain permission errors should not trigger a WebDAV remount")
+	}
+	for _, errText := range []string{
+		"readdirent /mnt/rd: input/output error",
+		"stat /mnt/rd: transport endpoint is not connected",
+		"open /mnt/rd: device not configured",
+	} {
+		if !isRecoverableRDWebDAVReadError(os.NewSyscallError("test", errString(errText))) {
+			t.Fatalf("expected recoverable WebDAV read error for %q", errText)
+		}
+	}
+}
+
+type errString string
+
+func (e errString) Error() string {
+	return string(e)
+}
+
 func TestEpisodeSymlinkPathPrefersTVDBShowID(t *testing.T) {
 	series := &models.Series{
 		TMDBID:   262388,
