@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 func TestExtractHashFromURLResolveSkipsDebridToken(t *testing.T) {
@@ -81,5 +82,30 @@ func TestFilterSeriesEpisodesForCacheScan(t *testing.T) {
 	}
 	if got[1].SeasonNumber != 1 || got[1].EpisodeNumber != 2 {
 		t.Fatalf("expected second scan candidate to be S01E02, got S%02dE%02d", got[1].SeasonNumber, got[1].EpisodeNumber)
+	}
+}
+
+func TestTorBoxLibraryAutoAddEnabledUsesAPIKeyWithoutProviderToggle(t *testing.T) {
+	if !TorBoxLibraryAutoAddEnabled(&settings.Settings{
+		UseTorBox:                  false,
+		AutoAddBestStreamsToTorBox: true,
+		TorBoxAPIKey:               "tb-key",
+	}) {
+		t.Fatal("expected TorBox library auto-add to use the API key even when TorBox is not the default provider")
+	}
+
+	if TorBoxLibraryAutoAddEnabled(&settings.Settings{
+		UseTorBox:                  true,
+		AutoAddBestStreamsToTorBox: false,
+		TorBoxAPIKey:               "tb-key",
+	}) {
+		t.Fatal("expected TorBox library auto-add to stay disabled when auto-add is off")
+	}
+
+	if TorBoxLibraryAutoAddEnabled(&settings.Settings{
+		UseTorBox:                  true,
+		AutoAddBestStreamsToTorBox: true,
+	}) {
+		t.Fatal("expected TorBox library auto-add to require a TorBox API key")
 	}
 }

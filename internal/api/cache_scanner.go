@@ -831,9 +831,11 @@ func (cs *CacheScanner) shouldAutoAddBestStreamsToTorBox() bool {
 	if cs.settingsManager == nil {
 		return false
 	}
-	current := cs.settingsManager.Get()
+	return TorBoxLibraryAutoAddEnabled(cs.settingsManager.Get())
+}
+
+func TorBoxLibraryAutoAddEnabled(current *settings.Settings) bool {
 	return current != nil &&
-		current.UseTorBox &&
 		current.AutoAddBestStreamsToTorBox &&
 		strings.TrimSpace(current.TorBoxAPIKey) != ""
 }

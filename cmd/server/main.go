@@ -998,7 +998,7 @@ func main() {
 				}
 
 				current := settingsManager.Get()
-				if current != nil && current.UseTorBox && current.AutoAddBestStreamsToTorBox {
+				if api.TorBoxLibraryAutoAddEnabled(current) {
 					services.GlobalScheduler.MarkRunning(services.ServiceTorBoxLibrarySync)
 					err := cacheScanner.SyncPendingTorBoxLibraryAddsNow(workerCtx)
 					services.GlobalScheduler.MarkComplete(services.ServiceTorBoxLibrarySync, err, interval)

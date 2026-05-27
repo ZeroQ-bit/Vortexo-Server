@@ -4723,7 +4723,7 @@ func (h *Handler) runService(serviceName string) {
 					log.Printf("[DMM Hashlists] Queuing Real-Debrid library sync for %d newly cached stream(s)", summary.StreamsCached)
 					go h.runService(services.ServiceRDLibrarySync)
 				}
-				if current != nil && current.UseTorBox && current.AutoAddBestStreamsToTorBox {
+				if TorBoxLibraryAutoAddEnabled(current) {
 					log.Printf("[DMM Hashlists] Queuing TorBox library sync for %d newly cached stream(s)", summary.StreamsCached)
 					go h.runService(services.ServiceTorBoxLibrarySync)
 				}
