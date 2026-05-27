@@ -17,6 +17,7 @@ type SettingsResponse struct {
 	TMDBAPIKey        string `json:"tmdb_api_key"`
 	FanartTVAPIKey    string `json:"fanart_tv_api_key"`
 	RealDebridToken   string `json:"realdebrid_token"`
+	TorBoxAPIKey      string `json:"torbox_api_key"`
 	PremiumizeAPIKey  string `json:"premiumize_api_key"`
 	MDBListAPIKey     string `json:"mdblist_api_key"`
 	TraktClientID     string `json:"trakt_client_id"`
@@ -47,6 +48,7 @@ type SettingsResponse struct {
 	OnlyReleasedContent            bool   `json:"only_released_content"`
 	HideUnavailableContent         bool   `json:"hide_unavailable_content"`
 	AutoAddBestStreamsToRealDebrid bool   `json:"auto_add_best_streams_to_realdebrid"`
+	AutoAddBestStreamsToTorBox     bool   `json:"auto_add_best_streams_to_torbox"`
 
 	// Stream Settings (quality/size handled by addon configuration)
 	EnableQualityVariants bool `json:"enable_quality_variants"`
@@ -63,6 +65,7 @@ type SettingsResponse struct {
 
 	// Providers
 	UseRealDebrid      bool   `json:"use_realdebrid"`
+	UseTorBox          bool   `json:"use_torbox"`
 	UsePremiumize      bool   `json:"use_premiumize"`
 	MediaFusionEnabled bool   `json:"mediafusion_enabled"`
 	TorrentioProviders string `json:"torrentio_providers"`

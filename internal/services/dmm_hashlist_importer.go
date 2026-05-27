@@ -22,6 +22,7 @@ import (
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/database"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
@@ -54,8 +55,8 @@ var (
 
 // DMMHashlistImporter turns the public DMM hashlists repository into a
 // conservative library source. It imports only items that can be matched to
-// TMDB with a year/title check and whose torrent hash is still cached on the
-// configured Real-Debrid account.
+// TMDB with a year/title check and whose torrent hash is still cached on a
+// configured debrid account.
 type DMMHashlistImporter struct {
 	movieStore       *database.MovieStore
 	seriesStore      *database.SeriesStore
@@ -212,8 +213,8 @@ func (i *DMMHashlistImporter) importWithMode(ctx context.Context, mode dmmHashli
 	if i.tmdbClient == nil || strings.TrimSpace(cfg.TMDBAPIKey) == "" {
 		return summary, fmt.Errorf("TMDB API key is required for DMM hashlist matching")
 	}
-	if strings.TrimSpace(cfg.RealDebridAPIKey) == "" {
-		return summary, fmt.Errorf("Real-Debrid API key is required to verify DMM hashes are cached")
+	if !dmmHasDebridAvailabilityProvider(cfg) {
+		return summary, fmt.Errorf("Real-Debrid or TorBox API key is required to verify DMM hashes are cached")
 	}
 
 	state, err := i.loadState(mode.stateFilename())
@@ -321,7 +322,7 @@ func (i *DMMHashlistImporter) importWithMode(ctx context.Context, mode dmmHashli
 	}
 	summary.CandidatesMatched = len(candidates)
 
-	cachedCandidates, err := i.filterCachedCandidates(ctx, candidates, cfg.RealDebridAPIKey)
+	cachedCandidates, err := i.filterCachedCandidates(ctx, candidates, cfg)
 	if err != nil {
 		return summary, err
 	}
@@ -330,7 +331,7 @@ func (i *DMMHashlistImporter) importWithMode(ctx context.Context, mode dmmHashli
 		if err := i.saveState(mode.stateFilename(), state); err != nil {
 			log.Printf("[DMM Hashlists] Failed to save state: %v", err)
 		}
-		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "No currently cached Real-Debrid hashes in this batch")
+		GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, 0, "No currently cached debrid hashes in this batch")
 		return summary, nil
 	}
 
@@ -584,29 +585,77 @@ func (i *DMMHashlistImporter) torrentAllowedByReleaseFilters(torrent DMMHashlist
 	return true
 }
 
-func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candidates []dmmCandidate, rdAPIKey string) ([]dmmCandidate, error) {
+func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candidates []dmmCandidate, cfg *isettings.Settings) ([]dmmCandidate, error) {
 	grouped := make(map[string][]dmmCandidate)
 	hashes := make([]string, 0, len(candidates))
 	seenHash := make(map[string]struct{})
 	for _, candidate := range candidates {
 		grouped[candidate.matchKey()] = append(grouped[candidate.matchKey()], candidate)
-		if _, seen := seenHash[candidate.Torrent.Hash]; !seen {
-			seenHash[candidate.Torrent.Hash] = struct{}{}
-			hashes = append(hashes, candidate.Torrent.Hash)
+		hash := normalizeDMMHash(candidate.Torrent.Hash)
+		if _, seen := seenHash[hash]; !seen {
+			seenHash[hash] = struct{}{}
+			hashes = append(hashes, hash)
 		}
 	}
 
-	availability, err := NewRealDebridClient(rdAPIKey).CheckInstantAvailability(ctx, hashes)
-	if err != nil {
-		if errors.Is(err, ErrRealDebridDisabledEndpoint) {
-			log.Printf("[DMM Hashlists] Real-Debrid instantAvailability endpoint is disabled; trusting DMM hashlist cache markers and deferring final verification to playback")
-			GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, len(candidates), "Real-Debrid availability endpoint disabled; using DMM cache markers")
-			return bestDMMCandidatesByGroup(grouped, nil), nil
+	availability := make(map[string]bool, len(hashes))
+	checked := false
+	trustDMMMarkers := false
+
+	if dmmRealDebridAvailabilityEnabled(cfg) {
+		rdAvailability, err := NewRealDebridClient(cfg.RealDebridAPIKey).CheckInstantAvailability(ctx, hashes)
+		if err != nil {
+			if errors.Is(err, ErrRealDebridDisabledEndpoint) {
+				log.Printf("[DMM Hashlists] Real-Debrid instantAvailability endpoint is disabled; trusting DMM hashlist cache markers and deferring final verification to playback")
+				GlobalScheduler.UpdateProgress(ServiceDMMHashlistImport, 0, len(candidates), "Real-Debrid availability endpoint disabled; using DMM cache markers")
+				trustDMMMarkers = true
+			} else if !dmmTorBoxAvailabilityEnabled(cfg) {
+				return nil, err
+			} else {
+				log.Printf("[DMM Hashlists] Real-Debrid cache check failed, trying TorBox: %v", err)
+			}
+		} else {
+			for hash, cached := range rdAvailability {
+				availability[normalizeDMMHash(hash)] = cached
+			}
+			checked = true
 		}
-		return nil, err
 	}
 
+	if dmmTorBoxAvailabilityEnabled(cfg) {
+		tbAvailability, err := debrid.NewTorBox(cfg.TorBoxAPIKey, nil).CheckCache(ctx, hashes)
+		if err != nil {
+			if !checked && !trustDMMMarkers {
+				return nil, err
+			}
+			log.Printf("[DMM Hashlists] TorBox cache check failed: %v", err)
+		} else {
+			for hash, cached := range tbAvailability {
+				availability[normalizeDMMHash(hash)] = cached
+			}
+			checked = true
+		}
+	}
+
+	if trustDMMMarkers && !checked {
+		return bestDMMCandidatesByGroup(grouped, nil), nil
+	}
+	if !checked {
+		return nil, fmt.Errorf("no debrid cache availability provider could be checked")
+	}
 	return bestDMMCandidatesByGroup(grouped, availability), nil
+}
+
+func dmmRealDebridAvailabilityEnabled(cfg *isettings.Settings) bool {
+	return cfg != nil && cfg.UseRealDebrid && strings.TrimSpace(cfg.RealDebridAPIKey) != ""
+}
+
+func dmmTorBoxAvailabilityEnabled(cfg *isettings.Settings) bool {
+	return cfg != nil && cfg.UseTorBox && strings.TrimSpace(cfg.TorBoxAPIKey) != ""
+}
+
+func dmmHasDebridAvailabilityProvider(cfg *isettings.Settings) bool {
+	return dmmRealDebridAvailabilityEnabled(cfg) || dmmTorBoxAvailabilityEnabled(cfg)
 }
 
 func bestDMMCandidatesByGroup(grouped map[string][]dmmCandidate, availability map[string]bool) []dmmCandidate {
@@ -1082,11 +1131,23 @@ func (i *DMMHashlistImporter) cacheMovieCandidateStream(ctx context.Context, mov
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_torrent_id
 			END,
-			rd_library_added_at = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-				ELSE media_streams.rd_library_added_at
-			END,
-			next_check_at = NOW() + INTERVAL '7 days',
+				rd_library_added_at = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.rd_library_added_at
+				END,
+				tb_library_added = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+					ELSE media_streams.tb_library_added
+				END,
+				tb_torrent_id = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.tb_torrent_id
+				END,
+				tb_library_added_at = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.tb_library_added_at
+				END,
+				next_check_at = NOW() + INTERVAL '7 days',
 			updated_at = NOW()
 		WHERE media_streams.quality_score IS NULL OR EXCLUDED.quality_score >= media_streams.quality_score
 	`
@@ -1162,11 +1223,23 @@ func (i *DMMHashlistImporter) cacheSeriesCandidateStream(ctx context.Context, se
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_torrent_id
 			END,
-			rd_library_added_at = CASE
-				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
-				ELSE media_streams.rd_library_added_at
-			END,
-			next_check_at = NOW() + INTERVAL '7 days',
+				rd_library_added_at = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.rd_library_added_at
+				END,
+				tb_library_added = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+					ELSE media_streams.tb_library_added
+				END,
+				tb_torrent_id = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.tb_torrent_id
+				END,
+				tb_library_added_at = CASE
+					WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+					ELSE media_streams.tb_library_added_at
+				END,
+				next_check_at = NOW() + INTERVAL '7 days',
 			updated_at = NOW()
 		WHERE media_streams.quality_score IS NULL OR EXCLUDED.quality_score >= media_streams.quality_score
 	`
@@ -1231,6 +1304,7 @@ func dmmCandidateStreamOption(candidate dmmCandidate, movieID, seriesID int) *mo
 		Indexer:        dmmHashlistIndexer,
 		IsAvailable:    true,
 		RDLibraryAdded: false,
+		TBLibraryAdded: false,
 	}
 }
 

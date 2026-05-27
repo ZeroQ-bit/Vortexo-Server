@@ -27,6 +27,7 @@ type Config struct {
 	TMDBAPIKey       string
 	FanartTVAPIKey   string
 	RealDebridAPIKey string
+	TorBoxAPIKey     string
 	PremiumizeAPIKey string
 	MDBListAPIKey    string
 
@@ -61,6 +62,7 @@ type Config struct {
 
 	// Provider Settings
 	UseRealDebrid bool
+	UseTorBox     bool
 	UsePremiumize bool
 	StremioAddons []StremioAddon
 
@@ -95,6 +97,7 @@ func Load() *Config {
 		TMDBAPIKey:       "",
 		FanartTVAPIKey:   "",
 		RealDebridAPIKey: "",
+		TorBoxAPIKey:     "",
 		PremiumizeAPIKey: "",
 		MDBListAPIKey:    "",
 
@@ -124,6 +127,7 @@ func Load() *Config {
 
 		// Provider defaults
 		UseRealDebrid: true,
+		UseTorBox:     false,
 		UsePremiumize: false,
 		StremioAddons: []StremioAddon{}, // Empty by default - users must configure their own addons
 

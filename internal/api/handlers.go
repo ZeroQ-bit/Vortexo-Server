@@ -255,6 +255,10 @@ func (h *Handler) refreshRuntimeConfig(cfg *settings.Settings) {
 
 	h.runtimeConfig.UserCreatePlaylist = cfg.UserCreatePlaylist
 	h.runtimeConfig.FanartTVAPIKey = cfg.FanartTVAPIKey
+	h.runtimeConfig.RealDebridAPIKey = cfg.RealDebridAPIKey
+	h.runtimeConfig.TorBoxAPIKey = cfg.TorBoxAPIKey
+	h.runtimeConfig.UseRealDebrid = cfg.UseRealDebrid
+	h.runtimeConfig.UseTorBox = cfg.UseTorBox
 	h.runtimeConfig.IncludeAdultVOD = cfg.IncludeAdultVOD
 	h.runtimeConfig.EnableQualityVariants = cfg.EnableQualityVariants
 	h.runtimeConfig.ShowFullStreamName = cfg.ShowFullStreamName
@@ -3296,12 +3300,16 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		log.Printf(
-			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v dmm_provider=%v dmm_import=%v dmm_fill_missing=%v rd_webdav=%v",
+			"[Settings] UpdateSettings: built_in_addon=%v provider_addons=%d enabled_provider_addons=%d use_realdebrid=%v rd_key_set=%v use_torbox=%v tb_key_set=%v auto_rd=%v auto_tb=%v dmm_provider=%v dmm_import=%v dmm_fill_missing=%v rd_webdav=%v",
 			newSettings.StremioAddon.Enabled,
 			len(newSettings.StremioAddons),
 			enabledProviderAddons,
 			newSettings.UseRealDebrid,
 			strings.TrimSpace(newSettings.RealDebridAPIKey) != "",
+			newSettings.UseTorBox,
+			strings.TrimSpace(newSettings.TorBoxAPIKey) != "",
+			newSettings.AutoAddBestStreamsToRealDebrid,
+			newSettings.AutoAddBestStreamsToTorBox,
 			newSettings.DMMProviderEnabled,
 			newSettings.DMMLibraryImportEnabled,
 			newSettings.DMMLibraryFillMissingEnabled,
@@ -3338,7 +3346,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		h.refreshRuntimeConfig(&newSettings)
 		h.refreshRuntimeClients(&newSettings)
 
-		if oldSettings.BlockBollywood != newSettings.BlockBollywood {
+		if oldSettings != nil && oldSettings.BlockBollywood != newSettings.BlockBollywood {
 			if newSettings.BlockBollywood {
 				log.Printf("[Settings] ✅ Playlist/import filter enabled: India-origin media will be blocked")
 			} else {
@@ -3347,7 +3355,7 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[Settings] 📺 Regenerate playlists and run Bollywood cleanup to remove existing blocked items")
 		}
 
-		if h.cacheScanner != nil && !oldSettings.AutoAddBestStreamsToRealDebrid && newSettings.AutoAddBestStreamsToRealDebrid {
+		if h.cacheScanner != nil && oldSettings != nil && !oldSettings.AutoAddBestStreamsToRealDebrid && newSettings.AutoAddBestStreamsToRealDebrid {
 			go func() {
 				log.Println("[Settings] Real-Debrid library sync enabled, starting background library scan...")
 				if err := h.cacheScanner.ScanAndUpgrade(context.Background()); err != nil {
@@ -3356,13 +3364,22 @@ func (h *Handler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 
-		if !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
+		if h.cacheScanner != nil && oldSettings != nil && !oldSettings.AutoAddBestStreamsToTorBox && newSettings.AutoAddBestStreamsToTorBox {
+			go func() {
+				log.Println("[Settings] TorBox library sync enabled, starting background library sync...")
+				if err := h.cacheScanner.SyncPendingTorBoxLibraryAddsNow(context.Background()); err != nil {
+					log.Printf("[Settings] TorBox library sync failed: %v", err)
+				}
+			}()
+		}
+
+		if oldSettings != nil && !oldSettings.DMMLibraryImportEnabled && newSettings.DMMLibraryImportEnabled {
 			log.Printf("[Settings] DMM full library import enabled; starting hashlist importer batch")
 			if h.dmmHashlistImporter != nil {
 				go h.runService(services.ServiceDMMHashlistImport)
 			}
 		}
-		if !oldSettings.DMMLibraryFillMissingEnabled && newSettings.DMMLibraryFillMissingEnabled {
+		if oldSettings != nil && !oldSettings.DMMLibraryFillMissingEnabled && newSettings.DMMLibraryFillMissingEnabled {
 			log.Printf("[Settings] DMM missing-stream fill enabled; starting hashlist importer batch")
 			if h.dmmHashlistImporter != nil {
 				go h.runService(services.ServiceDMMHashlistImport)
@@ -4680,12 +4697,20 @@ func (h *Handler) runService(serviceName string) {
 			err = h.cacheScanner.SyncPendingRealDebridLibraryAddsNow(ctx)
 		}
 
+	case services.ServiceTorBoxLibrarySync:
+		interval = 1 * time.Hour
+		if h.cacheScanner != nil {
+			err = h.cacheScanner.SyncPendingTorBoxLibraryAddsNow(ctx)
+		}
+
 	case services.ServiceDMMHashlistImport:
 		interval = 1 * time.Hour
 		var summary *services.DMMHashlistImportSummary
 		if h.dmmHashlistImporter != nil {
+			var current *settings.Settings
 			if h.settingsManager != nil {
-				if current := h.settingsManager.Get(); current != nil && !current.DMMLibraryImportEnabled && current.DMMLibraryFillMissingEnabled {
+				current = h.settingsManager.Get()
+				if current != nil && !current.DMMLibraryImportEnabled && current.DMMLibraryFillMissingEnabled {
 					summary, err = h.dmmHashlistImporter.FillMissingLibraryStreams(ctx)
 				} else {
 					summary, err = h.dmmHashlistImporter.Import(ctx)
@@ -4694,8 +4719,14 @@ func (h *Handler) runService(serviceName string) {
 				summary, err = h.dmmHashlistImporter.Import(ctx)
 			}
 			if err == nil && summary != nil && summary.StreamsCached > 0 && h.cacheScanner != nil {
-				log.Printf("[DMM Hashlists] Queuing Real-Debrid library sync for %d newly cached stream(s)", summary.StreamsCached)
-				go h.runService(services.ServiceRDLibrarySync)
+				if current == nil || (current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid) {
+					log.Printf("[DMM Hashlists] Queuing Real-Debrid library sync for %d newly cached stream(s)", summary.StreamsCached)
+					go h.runService(services.ServiceRDLibrarySync)
+				}
+				if current != nil && current.UseTorBox && current.AutoAddBestStreamsToTorBox {
+					log.Printf("[DMM Hashlists] Queuing TorBox library sync for %d newly cached stream(s)", summary.StreamsCached)
+					go h.runService(services.ServiceTorBoxLibrarySync)
+				}
 			}
 		} else {
 			services.GlobalScheduler.UpdateProgress(services.ServiceDMMHashlistImport, 0, 0, "DMM hashlist importer not initialized")

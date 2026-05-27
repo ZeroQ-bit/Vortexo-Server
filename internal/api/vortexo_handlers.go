@@ -21,6 +21,7 @@ import (
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/providers"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
+	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
 	streammeta "github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
 	"github.com/gorilla/mux"
 )
@@ -66,6 +67,7 @@ type vortexoPlayToken struct {
 	Title     string `json:"title,omitempty"`
 	FileIdx   int    `json:"fileIdx,omitempty"`
 	TorrentID string `json:"torrentId,omitempty"`
+	Provider  string `json:"provider,omitempty"`
 }
 
 const (
@@ -74,6 +76,8 @@ const (
 	vortexoRDWebDAVLocalURLPrefix    = "vortexo-rd-webdav://"
 	vortexoRealDebridLibrarySource   = "Real-Debrid Library"
 	vortexoRealDebridLibraryPriority = 100
+	vortexoTorBoxLibrarySource       = "TorBox Library"
+	vortexoTorBoxLibraryPriority     = 100
 	vortexoLibraryCacheSource        = "Vortexo Library Cache"
 	vortexoLibraryCachePriority      = 90
 )
@@ -214,7 +218,37 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 
 	token.Hash = normalizeTorrentHash(token.Hash)
 	if isVortexoSourceBlocked(token.Hash) {
-		respondError(w, http.StatusGone, "Real-Debrid rejected source: infringing_file")
+		respondError(w, http.StatusGone, "debrid rejected source: infringing_file")
+		return
+	}
+
+	if h.shouldResolveVortexoSourceWithTorBox(token.Provider) {
+		tb := h.vortexoTorBoxClient()
+		if tb == nil {
+			respondError(w, http.StatusServiceUnavailable, "TorBox is not configured")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		defer cancel()
+
+		var streamURL string
+		if strings.TrimSpace(token.TorrentID) != "" {
+			streamURL, err = tb.GetStreamURLForTorrentID(ctx, token.TorrentID, token.FileIdx)
+		} else {
+			streamURL, err = tb.GetStreamURL(ctx, token.Hash, token.FileIdx)
+		}
+		if err != nil {
+			log.Printf("[Vortexo] Failed to resolve TorBox source %q: %v", token.Title, err)
+			respondError(w, http.StatusBadGateway, safeVortexoPlaybackProviderError(err, "TorBox"))
+			return
+		}
+
+		if wantsVortexoPlayJSON(r) {
+			respondVortexoPlaybackURL(w, streamURL)
+			return
+		}
+		http.Redirect(w, r, streamURL, http.StatusFound)
 		return
 	}
 
@@ -250,6 +284,35 @@ func (h *Handler) VortexoPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, streamURL, http.StatusFound)
+}
+
+func (h *Handler) vortexoTorBoxClient() *debrid.TorBox {
+	if h == nil || h.settingsManager == nil {
+		return nil
+	}
+	cfg := h.settingsManager.Get()
+	if cfg == nil || !cfg.UseTorBox || strings.TrimSpace(cfg.TorBoxAPIKey) == "" {
+		return nil
+	}
+	return debrid.NewTorBox(cfg.TorBoxAPIKey, nil)
+}
+
+func (h *Handler) shouldResolveVortexoSourceWithTorBox(provider string) bool {
+	provider = strings.TrimSpace(provider)
+	if strings.EqualFold(provider, vortexoTorBoxLibrarySource) || strings.Contains(strings.ToLower(provider), "torbox") {
+		return true
+	}
+	if !strings.EqualFold(provider, vortexoLibraryCacheSource) {
+		return false
+	}
+	if h == nil || h.settingsManager == nil {
+		return false
+	}
+	cfg := h.settingsManager.Get()
+	if cfg == nil || !cfg.UseTorBox || strings.TrimSpace(cfg.TorBoxAPIKey) == "" {
+		return false
+	}
+	return !cfg.UseRealDebrid || strings.TrimSpace(cfg.RealDebridAPIKey) == ""
 }
 
 // VortexoLocalFile serves a tokenized local RD WebDAV symlink. It is separate
@@ -1138,8 +1201,22 @@ func (h *Handler) refreshVortexoCacheAvailability(ctx context.Context, streams [
 			availability = result
 			verified = true
 		}
-	} else if len(hashes) > 0 && onlyCached {
-		log.Printf("[Vortexo] Cached-only filtering requested but Real-Debrid client is unavailable; using provider cache markers")
+	}
+	if len(hashes) > 0 && !verified && h != nil {
+		if tb := h.vortexoTorBoxClient(); tb != nil {
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			result, err := tb.CheckCache(checkCtx, hashes)
+			cancel()
+			if err != nil {
+				log.Printf("[Vortexo] TorBox cached-only availability check failed: %v", err)
+			} else {
+				availability = result
+				verified = true
+			}
+		}
+	}
+	if len(hashes) > 0 && onlyCached && !verified {
+		log.Printf("[Vortexo] Cached-only filtering requested but no debrid cache check is available; using provider cache markers")
 	}
 
 	filtered := applyVortexoCacheAvailability(streams, availability, verified, onlyCached)
@@ -1386,7 +1463,7 @@ func vortexoStreamOptionFromTorrentio(req vortexoSourcesRequest, stream provider
 
 	title := firstNonEmpty(stream.Title, stream.Name, stream.BehaviorHints.Filename)
 	if title == "" {
-		title = "Real-Debrid library stream"
+		title = firstNonEmpty(strings.TrimSpace(stream.Source), "debrid library") + " stream"
 	}
 	streamURL := strings.TrimSpace(stream.URL)
 	if streamURL == "" {
@@ -1415,6 +1492,19 @@ func vortexoStreamOptionFromTorrentio(req vortexoSourcesRequest, stream provider
 		mediaID = seriesID
 	}
 
+	source := firstNonEmpty(strings.TrimSpace(stream.Source), vortexoRealDebridLibrarySource)
+	isRDLibrary := strings.EqualFold(source, vortexoRealDebridLibrarySource)
+	isTBLibrary := strings.EqualFold(source, vortexoTorBoxLibrarySource)
+	rdTorrentID := ""
+	rdFileID := 0
+	tbTorrentID := ""
+	if isRDLibrary {
+		rdTorrentID = strings.TrimSpace(stream.TorrentID)
+		rdFileID = stream.FileIdx
+	} else if isTBLibrary {
+		tbTorrentID = strings.TrimSpace(stream.TorrentID)
+	}
+
 	return &models.CachedStream{
 		MediaType:      mediaType,
 		MediaID:        mediaID,
@@ -1432,11 +1522,13 @@ func vortexoStreamOptionFromTorrentio(req vortexoSourcesRequest, stream provider
 		SourceType:     quality.Source,
 		FileSizeGB:     sizeGB,
 		Codec:          quality.Codec,
-		Indexer:        vortexoRealDebridLibrarySource,
+		Indexer:        source,
 		IsAvailable:    true,
-		RDLibraryAdded: true,
-		RDTorrentID:    strings.TrimSpace(stream.TorrentID),
-		RDFileID:       stream.FileIdx,
+		RDLibraryAdded: isRDLibrary,
+		RDTorrentID:    rdTorrentID,
+		RDFileID:       rdFileID,
+		TBLibraryAdded: isTBLibrary,
+		TBTorrentID:    tbTorrentID,
 	}
 }
 
@@ -1621,8 +1713,14 @@ func vortexoCachedStreamToTorrentio(cached models.CachedStream, req vortexoSourc
 
 	title := vortexoCachedStreamTitle(cached, req)
 	source := vortexoLibraryCacheSource
-	if cached.RDLibraryAdded || strings.TrimSpace(cached.RDTorrentID) != "" || cached.RDFileID > 0 || strings.EqualFold(strings.TrimSpace(cached.Indexer), vortexoRealDebridLibrarySource) {
+	if cached.TBLibraryAdded || strings.TrimSpace(cached.TBTorrentID) != "" || strings.EqualFold(strings.TrimSpace(cached.Indexer), vortexoTorBoxLibrarySource) {
+		source = vortexoTorBoxLibrarySource
+	} else if cached.RDLibraryAdded || strings.TrimSpace(cached.RDTorrentID) != "" || cached.RDFileID > 0 || strings.EqualFold(strings.TrimSpace(cached.Indexer), vortexoRealDebridLibrarySource) {
 		source = vortexoRealDebridLibrarySource
+	}
+	torrentID := strings.TrimSpace(cached.RDTorrentID)
+	if source == vortexoTorBoxLibrarySource {
+		torrentID = strings.TrimSpace(cached.TBTorrentID)
 	}
 	streamURL := strings.TrimSpace(cached.StreamURL)
 	if streamURL == "" && isValidHash(hash) {
@@ -1633,7 +1731,7 @@ func vortexoCachedStreamToTorrentio(cached models.CachedStream, req vortexoSourc
 		Name:      title,
 		Title:     title,
 		InfoHash:  hash,
-		TorrentID: strings.TrimSpace(cached.RDTorrentID),
+		TorrentID: torrentID,
 		FileIdx:   firstNonZero(cached.RDFileID, extractFileIndexFromStreamURL(cached.StreamURL)),
 		URL:       streamURL,
 		Quality:   cached.Resolution,
@@ -1912,6 +2010,7 @@ func vortexoStreamIsRDWebDAVLibrary(stream providers.TorrentioStream) bool {
 func vortexoStreamIsSavedLibrarySource(stream providers.TorrentioStream) bool {
 	source := strings.TrimSpace(stream.Source)
 	return strings.EqualFold(source, vortexoRealDebridLibrarySource) ||
+		strings.EqualFold(source, vortexoTorBoxLibrarySource) ||
 		strings.EqualFold(source, vortexoLibraryCacheSource)
 }
 
@@ -1975,6 +2074,9 @@ func vortexoStreamSourcePriority(stream providers.TorrentioStream) int {
 	}
 	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoRealDebridLibrarySource) {
 		return vortexoRealDebridLibraryPriority
+	}
+	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoTorBoxLibrarySource) {
+		return vortexoTorBoxLibraryPriority
 	}
 	if strings.EqualFold(strings.TrimSpace(stream.Source), vortexoLibraryCacheSource) {
 		return vortexoLibraryCachePriority
@@ -2043,6 +2145,7 @@ func (h *Handler) buildVortexoSources(providerStreams []providers.TorrentioStrea
 			Title:     stream.Title,
 			FileIdx:   stream.FileIdx,
 			TorrentID: strings.TrimSpace(stream.TorrentID),
+			Provider:  strings.TrimSpace(stream.Source),
 		}
 		if localPath != "" {
 			token.Hash = ""
@@ -2356,17 +2459,25 @@ func isRealDebridBlockedPlaybackError(err error) bool {
 }
 
 func safeVortexoPlaybackError(err error) string {
+	return safeVortexoPlaybackProviderError(err, "Real-Debrid")
+}
+
+func safeVortexoPlaybackProviderError(err error, provider string) string {
 	if err == nil {
 		return "failed to resolve source"
+	}
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		provider = "debrid"
 	}
 
 	var apiErr *services.RealDebridAPIError
 	if errors.As(err, &apiErr) {
 		if apiErr.ErrorName != "" {
-			return fmt.Sprintf("Real-Debrid rejected source: %s", apiErr.ErrorName)
+			return fmt.Sprintf("%s rejected source: %s", provider, apiErr.ErrorName)
 		}
 		if apiErr.StatusCode > 0 {
-			return fmt.Sprintf("Real-Debrid returned HTTP %d", apiErr.StatusCode)
+			return fmt.Sprintf("%s returned HTTP %d", provider, apiErr.StatusCode)
 		}
 	}
 
@@ -2377,7 +2488,7 @@ func safeVortexoPlaybackError(err error) string {
 	if len(message) > 180 {
 		message = message[:180] + "..."
 	}
-	return "failed to resolve source: " + message
+	return fmt.Sprintf("%s failed to resolve source: %s", provider, message)
 }
 
 func normalizeVortexoType(value string) string {

@@ -3,7 +3,7 @@ package debrid
 import "context"
 
 // DebridService defines the interface for debrid service providers
-// Supports Real-Debrid, AllDebrid, Premiumize, Debrid-Link
+// Supports Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link
 type DebridService interface {
 	// CheckCache checks which torrent hashes are cached on the debrid service
 	// Returns a map of hash -> isCached for instant availability lookup

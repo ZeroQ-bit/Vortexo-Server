@@ -44,12 +44,41 @@ func (e *RateLimitError) Error() string {
 	return message
 }
 
+// TorBoxRateLimitError preserves TorBox backoff hints for background sync jobs.
+type TorBoxRateLimitError struct {
+	Operation  string
+	StatusCode int
+	RetryAfter time.Duration
+	Body       string
+}
+
+func (e *TorBoxRateLimitError) Error() string {
+	if e == nil {
+		return "TorBox rate limit"
+	}
+	message := "TorBox rate limit"
+	if e.Operation != "" {
+		message += " during " + e.Operation
+	}
+	if e.RetryAfter > 0 {
+		message += fmt.Sprintf("; retry after %s", e.RetryAfter.Round(time.Second))
+	}
+	if e.Body != "" {
+		message += ": " + e.Body
+	}
+	return message
+}
+
 func IsRateLimitError(err error) bool {
 	if err == nil {
 		return false
 	}
 	var rateErr *RateLimitError
 	if errors.As(err, &rateErr) {
+		return true
+	}
+	var torBoxRateErr *TorBoxRateLimitError
+	if errors.As(err, &torBoxRateErr) {
 		return true
 	}
 	msg := strings.ToLower(err.Error())
@@ -65,6 +94,10 @@ func RateLimitRetryAfter(err error) time.Duration {
 	if errors.As(err, &rateErr) && rateErr.RetryAfter > 0 {
 		return rateErr.RetryAfter
 	}
+	var torBoxRateErr *TorBoxRateLimitError
+	if errors.As(err, &torBoxRateErr) && torBoxRateErr.RetryAfter > 0 {
+		return torBoxRateErr.RetryAfter
+	}
 	return 0
 }
 
@@ -78,6 +111,23 @@ func realDebridRateLimitError(operation string, resp *http.Response, body []byte
 		statusCode = resp.StatusCode
 	}
 	return &RateLimitError{
+		Operation:  operation,
+		StatusCode: statusCode,
+		RetryAfter: retryAfter,
+		Body:       strings.TrimSpace(string(body)),
+	}
+}
+
+func torBoxRateLimitError(operation string, resp *http.Response, body []byte) *TorBoxRateLimitError {
+	var retryAfter time.Duration
+	if resp != nil {
+		retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+	}
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	return &TorBoxRateLimitError{
 		Operation:  operation,
 		StatusCode: statusCode,
 		RetryAfter: retryAfter,

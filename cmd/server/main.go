@@ -148,6 +148,11 @@ func main() {
 		cfg.UseRealDebrid = true
 		log.Println("✓ Real-Debrid API key loaded from settings")
 	}
+	if appSettings.TorBoxAPIKey != "" {
+		cfg.TorBoxAPIKey = appSettings.TorBoxAPIKey
+		cfg.UseTorBox = true
+		log.Println("✓ TorBox API key loaded from settings")
+	}
 	if appSettings.PremiumizeAPIKey != "" {
 		cfg.PremiumizeAPIKey = appSettings.PremiumizeAPIKey
 		cfg.UsePremiumize = true
@@ -160,6 +165,7 @@ func main() {
 
 	// Provider settings
 	cfg.UseRealDebrid = appSettings.UseRealDebrid
+	cfg.UseTorBox = appSettings.UseTorBox
 	cfg.UsePremiumize = appSettings.UsePremiumize
 
 	// Quality settings
@@ -318,6 +324,13 @@ func main() {
 			log.Println("Real-Debrid connection verified")
 		}
 	}
+	if cfg.UseTorBox && cfg.TorBoxAPIKey != "" {
+		if debrid.NewTorBox(cfg.TorBoxAPIKey, slog.Default()).IsAuthenticated(ctx) {
+			log.Println("TorBox connection verified")
+		} else {
+			log.Println("Warning: TorBox connection test failed")
+		}
+	}
 
 	// ============ PHASE 1: SMART STREAM CACHING SYSTEM ============
 	// Helper function to convert provider streams to Phase 1 format
@@ -350,19 +363,21 @@ func main() {
 	var streamService *streams.StreamService
 	var streamChecker *streams.StreamChecker
 
-	if cfg.RealDebridAPIKey != "" {
-		// Initialize Real-Debrid service
+	if cfg.UseRealDebrid && cfg.RealDebridAPIKey != "" {
 		debridService = debrid.NewRealDebrid(cfg.RealDebridAPIKey, slog.Default())
 		log.Println("✓ Real-Debrid service initialized for Phase 1 caching")
+	} else if cfg.UseTorBox && cfg.TorBoxAPIKey != "" {
+		debridService = debrid.NewTorBox(cfg.TorBoxAPIKey, slog.Default())
+		log.Println("✓ TorBox service initialized for Phase 1 caching")
+	}
 
-		// Initialize stream service
+	if debridService != nil {
 		streamService = streams.NewStreamService(debridService, slog.Default())
 		log.Println("✓ Stream service initialized with quality scoring")
 
-		// Note: streamChecker will be initialized after multiProvider is created
 		log.Println("✓ Stream checker will be initialized with provider integration")
 	} else {
-		log.Println("⚠ Phase 1 caching disabled - Real-Debrid API key not configured")
+		log.Println("⚠ Phase 1 caching disabled - no debrid API key configured")
 	}
 
 	// Initialize EPG manager
@@ -427,7 +442,7 @@ func main() {
 	log.Printf("✓ Stream providers enabled: %v", multiProvider.ProviderNames)
 
 	// Phase 1: Initialize stream checker with provider integration
-	if cfg.RealDebridAPIKey != "" && debridService != nil && streamService != nil {
+	if debridService != nil && streamService != nil {
 		// Create indexer search function that uses multiProvider
 		indexerSearchFunc := func(ctx context.Context, movieID int) ([]models.TorrentStream, error) {
 			// Get movie from database to extract IMDB ID
@@ -945,7 +960,7 @@ func main() {
 
 				nextDelay := interval
 				current := settingsManager.Get()
-				if current != nil && current.UseRealDebrid {
+				if current != nil && current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid {
 					services.GlobalScheduler.MarkRunning(services.ServiceRDLibrarySync)
 					err := cacheScanner.SyncPendingRealDebridLibraryAddsNow(workerCtx)
 					if retryDelay := api.RealDebridLibrarySyncRetryDelay(err); retryDelay > 0 {
@@ -964,6 +979,35 @@ func main() {
 				}
 
 				timer.Reset(nextDelay)
+			}
+		}()
+
+		go func() {
+			interval := 1 * time.Hour
+			log.Printf("📦 TorBox Library Sync Worker: Starting (interval: %v)", interval)
+
+			timer := time.NewTimer(2 * time.Minute)
+			defer timer.Stop()
+
+			for {
+				select {
+				case <-workerCtx.Done():
+					log.Println("🛑 TorBox Library Sync Worker: Shutting down")
+					return
+				case <-timer.C:
+				}
+
+				current := settingsManager.Get()
+				if current != nil && current.UseTorBox && current.AutoAddBestStreamsToTorBox {
+					services.GlobalScheduler.MarkRunning(services.ServiceTorBoxLibrarySync)
+					err := cacheScanner.SyncPendingTorBoxLibraryAddsNow(workerCtx)
+					services.GlobalScheduler.MarkComplete(services.ServiceTorBoxLibrarySync, err, interval)
+					if err != nil {
+						log.Printf("❌ TorBox Library Sync error: %v", err)
+					}
+				}
+
+				timer.Reset(interval)
 			}
 		}()
 	}

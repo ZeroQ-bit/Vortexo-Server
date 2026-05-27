@@ -61,6 +61,7 @@ type Settings struct {
 	TMDBAPIKey        string `json:"tmdb_api_key"`
 	FanartTVAPIKey    string `json:"fanart_tv_api_key"`
 	RealDebridAPIKey  string `json:"realdebrid_api_key"`
+	TorBoxAPIKey      string `json:"torbox_api_key"`
 	PremiumizeAPIKey  string `json:"premiumize_api_key"`
 	MDBListAPIKey     string `json:"mdblist_api_key"`
 	MDBListLists      string `json:"mdblist_lists"`
@@ -107,6 +108,7 @@ type Settings struct {
 	OnlyCachedStreams              bool   `json:"only_cached_streams"`                 // Only include media with cached streams in Stream Cache Monitor
 	OnlyReleasedContent            bool   `json:"only_released_content"`               // Only include released content in IPTV playlist
 	AutoAddBestStreamsToRealDebrid bool   `json:"auto_add_best_streams_to_realdebrid"` // Add the best discovered library stream to the user's Real-Debrid account
+	AutoAddBestStreamsToTorBox     bool   `json:"auto_add_best_streams_to_torbox"`     // Add the best discovered library stream to the user's TorBox account
 
 	// Content Filters
 	BlockBollywood bool `json:"block_bollywood"` // Block Indian-origin (Bollywood) media from import and playlists
@@ -128,6 +130,7 @@ type Settings struct {
 
 	// Provider Settings
 	UseRealDebrid bool           `json:"use_realdebrid"`
+	UseTorBox     bool           `json:"use_torbox"`
 	UsePremiumize bool           `json:"use_premiumize"`
 	StremioAddons []StremioAddon `json:"stremio_addons"` // Custom Stremio addons for content providers
 
@@ -261,6 +264,7 @@ func getDefaultSettings() *Settings {
 		IPTVVODFastImport:              false,
 		ImportAdultVODFromGitHub:       false,
 		AutoAddBestStreamsToRealDebrid: false,
+		AutoAddBestStreamsToTorBox:     false,
 		// Content Filters
 		BlockBollywood:                  false,
 		BalkanVODEnabled:                false,      // Disabled by default - users need to enable
@@ -269,6 +273,7 @@ func getDefaultSettings() *Settings {
 		BalkanVODSelectedCategories:     []string{}, // Empty = import all categories
 		AutoCacheIntervalHours:          6,
 		UseRealDebrid:                   true,
+		UseTorBox:                       false,
 		UsePremiumize:                   false,
 		CometEnabled:                    false,
 		CometIndexers:                   "bitorrent,therarbg,yts,eztv,thepiratebay",
@@ -603,6 +608,12 @@ func (m *Manager) GetRealDebridAPIKey() string {
 	return m.settings.RealDebridAPIKey
 }
 
+func (m *Manager) GetTorBoxAPIKey() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings.TorBoxAPIKey
+}
+
 func (m *Manager) GetMDBListAPIKey() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -646,6 +657,12 @@ func (m *Manager) UseRealDebrid() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.settings.UseRealDebrid
+}
+
+func (m *Manager) UseTorBox() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.settings.UseTorBox
 }
 
 func (m *Manager) UsePremiumize() bool {
@@ -694,6 +711,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"fanart_tv_api_key":                    m.settings.FanartTVAPIKey,
 		"realdebrid_api_key":                   m.settings.RealDebridAPIKey,
 		"realdebrid_token":                     m.settings.RealDebridAPIKey,
+		"torbox_api_key":                       m.settings.TorBoxAPIKey,
 		"premiumize_api_key":                   m.settings.PremiumizeAPIKey,
 		"mdblist_api_key":                      m.settings.MDBListAPIKey,
 		"trakt_client_id":                      m.settings.TraktClientID,
@@ -706,6 +724,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"opensubtitles_password":               m.settings.OpenSubtitlesPassword,
 		"opensubtitles_languages":              m.settings.OpenSubtitlesLanguages,
 		"use_realdebrid":                       m.settings.UseRealDebrid,
+		"use_torbox":                           m.settings.UseTorBox,
 		"use_premiumize":                       m.settings.UsePremiumize,
 		"comet_enabled":                        m.settings.CometEnabled,
 		"comet_indexers":                       m.settings.CometIndexers,
@@ -741,6 +760,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"only_released_content":                m.settings.OnlyReleasedContent,
 		"hide_unavailable_content":             m.settings.HideUnavailableContent,
 		"auto_add_best_streams_to_realdebrid":  m.settings.AutoAddBestStreamsToRealDebrid,
+		"auto_add_best_streams_to_torbox":      m.settings.AutoAddBestStreamsToTorBox,
 		"block_bollywood":                      m.settings.BlockBollywood,
 		"debug":                                m.settings.Debug,
 		"language":                             m.settings.Language,
@@ -773,6 +793,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["realdebrid_token"].(string); ok {
 		m.settings.RealDebridAPIKey = v
+	}
+	if v, ok := updates["torbox_api_key"].(string); ok {
+		m.settings.TorBoxAPIKey = v
 	}
 	if v, ok := updates["premiumize_api_key"].(string); ok {
 		m.settings.PremiumizeAPIKey = v
@@ -809,6 +832,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["use_realdebrid"].(bool); ok {
 		m.settings.UseRealDebrid = v
+	}
+	if v, ok := updates["use_torbox"].(bool); ok {
+		m.settings.UseTorBox = v
 	}
 	if v, ok := updates["use_premiumize"].(bool); ok {
 		m.settings.UsePremiumize = v
@@ -914,6 +940,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["auto_add_best_streams_to_realdebrid"].(bool); ok {
 		m.settings.AutoAddBestStreamsToRealDebrid = v
+	}
+	if v, ok := updates["auto_add_best_streams_to_torbox"].(bool); ok {
+		m.settings.AutoAddBestStreamsToTorBox = v
 	}
 	if v, ok := updates["block_bollywood"].(bool); ok {
 		m.settings.BlockBollywood = v

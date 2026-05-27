@@ -172,6 +172,9 @@ type CachedStream struct {
 	RDTorrentID      string     `json:"rd_torrent_id"`
 	RDFileID         int        `json:"rd_file_id"`
 	RDLibraryAddedAt *time.Time `json:"rd_library_added_at,omitempty"`
+	TBLibraryAdded   bool       `json:"tb_library_added"`
+	TBTorrentID      string     `json:"tb_torrent_id"`
+	TBLibraryAddedAt *time.Time `json:"tb_library_added_at,omitempty"`
 	NextCheckAt      time.Time  `json:"next_check_at"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`

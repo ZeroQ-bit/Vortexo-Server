@@ -60,6 +60,11 @@ func main() {
 		cfg.UseRealDebrid = true
 		log.Println("✓ Real-Debrid API key loaded from settings")
 	}
+	if appSettings.TorBoxAPIKey != "" {
+		cfg.TorBoxAPIKey = appSettings.TorBoxAPIKey
+		cfg.UseTorBox = true
+		log.Println("✓ TorBox API key loaded from settings")
+	}
 	if appSettings.PremiumizeAPIKey != "" {
 		cfg.PremiumizeAPIKey = appSettings.PremiumizeAPIKey
 		cfg.UsePremiumize = true
@@ -72,6 +77,7 @@ func main() {
 
 	// Provider settings
 	cfg.UseRealDebrid = appSettings.UseRealDebrid
+	cfg.UseTorBox = appSettings.UseTorBox
 	cfg.UsePremiumize = appSettings.UsePremiumize
 
 	// Playlist settings

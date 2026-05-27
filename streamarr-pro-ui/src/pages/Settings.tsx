@@ -94,6 +94,7 @@ interface SettingsData {
   tmdb_api_key: string;
   fanart_tv_api_key: string;
   realdebrid_api_key: string;
+  torbox_api_key: string;
   premiumize_api_key: string;
   mdblist_api_key: string;
   trakt_client_id: string;
@@ -111,6 +112,7 @@ interface SettingsData {
   max_resolution: number;
   max_file_size: number;
   use_realdebrid: boolean;
+  use_torbox: boolean;
   use_premiumize: boolean;
   dmm_provider_enabled: boolean;
   dmm_provider_url: string;
@@ -127,6 +129,7 @@ interface SettingsData {
   rd_webdav_clean_stale_symlinks: boolean;
   rd_webdav_prefer_webdav_library_only: boolean;
   auto_add_best_streams_to_realdebrid: boolean;
+  auto_add_best_streams_to_torbox: boolean;
 
   stremio_addons: Array<{ name: string; url: string; enabled: boolean }>;
   stream_providers: string[] | string;
@@ -605,6 +608,14 @@ export default function Settings() {
       );
       data.dmm_library_fill_missing_enabled = Boolean(
         data.dmm_library_fill_missing_enabled ?? true,
+      );
+      data.use_realdebrid = Boolean(data.use_realdebrid);
+      data.use_torbox = Boolean(data.use_torbox);
+      data.auto_add_best_streams_to_realdebrid = Boolean(
+        data.auto_add_best_streams_to_realdebrid,
+      );
+      data.auto_add_best_streams_to_torbox = Boolean(
+        data.auto_add_best_streams_to_torbox,
       );
       data.rd_webdav_library_enabled = Boolean(
         data.rd_webdav_library_enabled,
@@ -1728,6 +1739,9 @@ export default function Settings() {
     if (name === "rd_library_sync") {
       return "Real-Debrid Library Sync";
     }
+    if (name === "torbox_library_sync") {
+      return "TorBox Library Sync";
+    }
     if (name === "rd_webdav_library") {
       return "Debrid WebDAV Library";
     }
@@ -2148,6 +2162,33 @@ export default function Settings() {
 
                   <div>
                     <label className="block text-sm font-medium text-slate-300 mb-2">
+                      TorBox API Key
+                    </label>
+                    <input
+                      type="text"
+                      value={settings?.torbox_api_key || ""}
+                      onChange={(e) =>
+                        updateSetting("torbox_api_key", e.target.value)
+                      }
+                      className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                      placeholder="Your TorBox API key"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">
+                      Debrid service for cached torrent streams, DMM cache
+                      checks, and background library adds.{" "}
+                      <a
+                        href="https://torbox.app/settings"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-red-400 hover:underline"
+                      >
+                        Open TorBox settings
+                      </a>
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-300 mb-2">
                       Premiumize API Key
                     </label>
                     <input
@@ -2537,13 +2578,18 @@ export default function Settings() {
                     </div>
                   </div>
                   <div
-                    className="flex items-center gap-3 p-4 rounded-lg border border-white/10 bg-[#2a2a2a]/30 opacity-50 cursor-not-allowed"
-                    title="Coming soon"
+                    className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                      settings?.use_torbox
+                        ? "bg-green-900/30 border-green-700 hover:bg-green-900/50"
+                        : "bg-[#2a2a2a]/50 border-white/10 opacity-60 hover:opacity-80"
+                    }`}
+                    onClick={() =>
+                      updateSetting("use_torbox", !settings?.use_torbox)
+                    }
                   >
                     <input
                       type="checkbox"
-                      checked={false}
-                      disabled
+                      checked={settings?.use_torbox || false}
                       onChange={() => {}}
                       className="w-4 h-4 bg-[#2a2a2a] border-white/10 rounded pointer-events-none"
                     />
@@ -2551,7 +2597,9 @@ export default function Settings() {
                       <div className="text-sm font-medium text-white">
                         TorBox
                       </div>
-                      <div className="text-xs text-slate-500">Coming soon</div>
+                      <div className="text-xs text-slate-500">
+                        DMM-compatible cached torrents
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2576,6 +2624,33 @@ export default function Settings() {
                       onChange={(e) =>
                         updateSetting(
                           "auto_add_best_streams_to_realdebrid",
+                          e.target.checked,
+                        )
+                      }
+                      className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                    />
+                  </label>
+                </div>
+                <div className="mt-4 rounded-xl border border-white/10 bg-[#1f1f1f]/70 p-4">
+                  <label className="flex items-start justify-between gap-4 cursor-pointer">
+                    <div>
+                      <div className="text-sm font-medium text-white">
+                        Auto-add best library streams to TorBox
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">
+                        When enabled, Vortexo Server will scan your library, pick
+                        the best discovered stream for each item, and add cached
+                        torrents to your TorBox account in the background.
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={
+                        settings?.auto_add_best_streams_to_torbox || false
+                      }
+                      onChange={(e) =>
+                        updateSetting(
+                          "auto_add_best_streams_to_torbox",
                           e.target.checked,
                         )
                       }
@@ -2732,7 +2807,7 @@ export default function Settings() {
                 </h3>
                 <p className="text-sm text-slate-400">
                   Use DMM hashlists to seed Vortexo's stream cache for
-                  Real-Debrid library sync and playback.
+                  debrid library sync and playback.
                 </p>
               </div>
 
@@ -2750,7 +2825,7 @@ export default function Settings() {
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
                       Scan DMM hashlists in background batches and only attach
-                      cached Real-Debrid streams to movies and episodes already
+                      cached debrid streams to movies and episodes already
                       in your Vortexo library.
                     </div>
                   </div>
@@ -2784,7 +2859,7 @@ export default function Settings() {
                     </div>
                     <div className="text-xs text-slate-400 mt-1">
                       Scan DMM hashlists in background batches, verify
-                      Real-Debrid cache, then write high-confidence streams to
+                      enabled debrid cache, then write high-confidence streams to
                       Vortexo's imported library cache.
                     </div>
                   </div>
@@ -2825,8 +2900,8 @@ export default function Settings() {
                   Full library import is active. The DMM Hashlist Import service
                   processes the public hashlist repo in batches and stores
                   matched cached hashes in Vortexo Server's stream cache. If
-                  Real-Debrid disables bulk cache checks, playback still verifies
-                  each DMM hash through Real-Debrid before serving a stream.
+                  a bulk cache check is unavailable, playback and background sync
+                  can still verify each DMM hash through the enabled provider.
                 </div>
               )}
             </div>

@@ -20,13 +20,14 @@ const cachedStreamSelectColumns = `
 	media_streams.resolution, media_streams.hdr_type, media_streams.audio_format, media_streams.source_type, media_streams.file_size_gb,
 	media_streams.codec, media_streams.indexer, media_streams.cached_at, media_streams.last_checked, media_streams.check_count,
 	media_streams.is_available, media_streams.upgrade_available, media_streams.rd_library_added, media_streams.rd_torrent_id, media_streams.rd_library_added_at,
+	media_streams.tb_library_added, media_streams.tb_torrent_id, media_streams.tb_library_added_at,
 	media_streams.next_check_at, media_streams.created_at, media_streams.updated_at
 `
 
 const streamOptionSelectColumns = `
 	media_stream_options.id, media_stream_options.media_type, media_stream_options.media_id, media_stream_options.movie_id, media_stream_options.series_id, media_stream_options.season, media_stream_options.episode, media_stream_options.stream_title, media_stream_options.stream_url, media_stream_options.stream_hash, media_stream_options.quality_score,
 	media_stream_options.resolution, media_stream_options.hdr_type, media_stream_options.audio_format, media_stream_options.source_type, media_stream_options.file_size_gb, media_stream_options.codec, media_stream_options.indexer,
-	media_stream_options.rd_torrent_id, media_stream_options.rd_file_id, media_stream_options.rd_library_added, media_stream_options.cached_at, media_stream_options.last_checked, media_stream_options.is_available, media_stream_options.created_at, media_stream_options.updated_at
+	media_stream_options.rd_torrent_id, media_stream_options.rd_file_id, media_stream_options.rd_library_added, media_stream_options.tb_torrent_id, media_stream_options.tb_library_added, media_stream_options.cached_at, media_stream_options.last_checked, media_stream_options.is_available, media_stream_options.created_at, media_stream_options.updated_at
 `
 
 // NewStreamCacheStore creates a new stream cache store
@@ -149,12 +150,12 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 				media_type, media_id, movie_id, stream_title, stream_url, stream_hash,
 				quality_score, resolution, hdr_type, audio_format, source_type,
 				file_size_gb, codec, indexer, rd_torrent_id, rd_file_id,
-				rd_library_added, cached_at, last_checked, is_available, created_at, updated_at
+				rd_library_added, tb_torrent_id, tb_library_added, cached_at, last_checked, is_available, created_at, updated_at
 			) VALUES (
 				'movie', $1, $2, $3, $4, $5,
 				$6, $7, $8, $9, $10,
 				$11, $12, $13, $14, $15,
-				$16, NOW(), NOW(), true, NOW(), NOW()
+				$16, $17, $18, NOW(), NOW(), true, NOW(), NOW()
 			)
 			ON CONFLICT (movie_id, stream_hash, rd_file_id)
 			WHERE movie_id IS NOT NULL AND series_id IS NULL
@@ -174,6 +175,11 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 					ELSE media_stream_options.rd_torrent_id
 				END,
 				rd_library_added = media_stream_options.rd_library_added OR EXCLUDED.rd_library_added,
+				tb_torrent_id = CASE
+					WHEN EXCLUDED.tb_torrent_id <> '' THEN EXCLUDED.tb_torrent_id
+					ELSE media_stream_options.tb_torrent_id
+				END,
+				tb_library_added = media_stream_options.tb_library_added OR EXCLUDED.tb_library_added,
 				last_checked = NOW(),
 				is_available = true,
 				updated_at = NOW()
@@ -195,6 +201,8 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 			stream.RDTorrentID,
 			stream.RDFileID,
 			stream.RDLibraryAdded,
+			stream.TBTorrentID,
+			stream.TBLibraryAdded,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to upsert movie stream option: %w", err)
@@ -210,12 +218,12 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 			media_type, media_id, series_id, season, episode, stream_title, stream_url, stream_hash,
 			quality_score, resolution, hdr_type, audio_format, source_type,
 			file_size_gb, codec, indexer, rd_torrent_id, rd_file_id,
-			rd_library_added, cached_at, last_checked, is_available, created_at, updated_at
+			rd_library_added, tb_torrent_id, tb_library_added, cached_at, last_checked, is_available, created_at, updated_at
 		) VALUES (
 			'series', $1, $2, $3, $4, $5, $6, $7,
 			$8, $9, $10, $11, $12,
 			$13, $14, $15, $16, $17,
-			$18, NOW(), NOW(), true, NOW(), NOW()
+			$18, $19, $20, NOW(), NOW(), true, NOW(), NOW()
 		)
 		ON CONFLICT (series_id, season, episode, stream_hash, rd_file_id)
 		WHERE series_id IS NOT NULL
@@ -235,6 +243,11 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 				ELSE media_stream_options.rd_torrent_id
 			END,
 			rd_library_added = media_stream_options.rd_library_added OR EXCLUDED.rd_library_added,
+			tb_torrent_id = CASE
+				WHEN EXCLUDED.tb_torrent_id <> '' THEN EXCLUDED.tb_torrent_id
+				ELSE media_stream_options.tb_torrent_id
+			END,
+			tb_library_added = media_stream_options.tb_library_added OR EXCLUDED.tb_library_added,
 			last_checked = NOW(),
 			is_available = true,
 			updated_at = NOW()
@@ -258,6 +271,8 @@ func (s *StreamCacheStore) UpsertStreamOption(ctx context.Context, stream *model
 		stream.RDTorrentID,
 		stream.RDFileID,
 		stream.RDLibraryAdded,
+		stream.TBTorrentID,
+		stream.TBLibraryAdded,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to upsert episode stream option: %w", err)
@@ -307,6 +322,18 @@ func (s *StreamCacheStore) CacheStream(ctx context.Context, movieID int, stream 
 			rd_library_added_at = CASE
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_library_added_at
+			END,
+			tb_library_added = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+				ELSE media_streams.tb_library_added
+			END,
+			tb_torrent_id = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.tb_torrent_id
+			END,
+			tb_library_added_at = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.tb_library_added_at
 			END,
 			next_check_at = NOW() + INTERVAL '7 days',
 			updated_at = NOW()
@@ -686,6 +713,104 @@ func (s *StreamCacheStore) MarkRealDebridLibraryAddedByHash(ctx context.Context,
 	return nil
 }
 
+func (s *StreamCacheStore) MarkTorBoxLibraryAddedByID(ctx context.Context, cacheID int, torrentID string) error {
+	query := `
+		UPDATE media_streams
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($2, ''),
+		    tb_library_added_at = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, cacheID, torrentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark TorBox library add: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream found for cache id %d", cacheID)
+	}
+	return nil
+}
+
+func (s *StreamCacheStore) MarkTorBoxLibraryAddedForMovie(ctx context.Context, movieID int, torrentID string) error {
+	query := `
+		UPDATE media_streams
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($2, ''),
+		    tb_library_added_at = NOW(),
+		    updated_at = NOW()
+		WHERE movie_id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, movieID, torrentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark TorBox movie add: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no movie stream found for movie_id %d", movieID)
+	}
+	return nil
+}
+
+func (s *StreamCacheStore) MarkTorBoxLibraryAddedForSeriesEpisode(ctx context.Context, seriesID, season, episode int, torrentID string) error {
+	query := `
+		UPDATE media_streams
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($4, ''),
+		    tb_library_added_at = NOW(),
+		    updated_at = NOW()
+		WHERE series_id = $1
+		  AND season = $2
+		  AND episode = $3
+	`
+
+	result, err := s.db.ExecContext(ctx, query, seriesID, season, episode, torrentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark TorBox series add: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no series stream found for series_id %d S%02dE%02d", seriesID, season, episode)
+	}
+	return nil
+}
+
+func (s *StreamCacheStore) MarkTorBoxLibraryAddedByHash(ctx context.Context, hash string, torrentID string) error {
+	hash = strings.TrimSpace(hash)
+	if hash == "" {
+		return nil
+	}
+
+	streamQuery := `
+		UPDATE media_streams
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($2, ''),
+		    tb_library_added_at = NOW(),
+		    updated_at = NOW()
+		WHERE LOWER(stream_hash) = LOWER($1)
+	`
+	if _, err := s.db.ExecContext(ctx, streamQuery, hash, torrentID); err != nil {
+		return fmt.Errorf("failed to mark TorBox streams by hash: %w", err)
+	}
+
+	optionQuery := `
+		UPDATE media_stream_options
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($2, ''),
+		    last_checked = NOW(),
+		    updated_at = NOW()
+		WHERE LOWER(stream_hash) = LOWER($1)
+	`
+	if _, err := s.db.ExecContext(ctx, optionQuery, hash, torrentID); err != nil {
+		return fmt.Errorf("failed to mark TorBox stream options by hash: %w", err)
+	}
+
+	return nil
+}
+
 // GetPendingRealDebridLibraryAdds retrieves cached streams that have not yet
 // been added to the user's Real-Debrid account.
 func (s *StreamCacheStore) GetPendingRealDebridLibraryAdds(ctx context.Context, limit int) ([]*models.CachedStream, error) {
@@ -766,6 +891,80 @@ func (s *StreamCacheStore) GetPendingRealDebridStreamOptions(ctx context.Context
 	return scanStreamOptionRows(rows)
 }
 
+func (s *StreamCacheStore) GetPendingTorBoxLibraryAdds(ctx context.Context, limit int) ([]*models.CachedStream, error) {
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_streams
+		LEFT JOIN library_movies m ON m.id = media_streams.movie_id
+		LEFT JOIN library_series srs ON srs.id = media_streams.series_id
+		WHERE is_available = true
+		  AND COALESCE(stream_hash, '') <> ''
+		  AND tb_library_added = false
+		  AND (
+			media_type <> 'movie'
+			OR COALESCE(NULLIF(m.metadata->>'release_date', '')::timestamptz <= NOW(), true)
+		  )
+		  AND (
+			media_type <> 'series'
+			OR COALESCE(NULLIF(srs.metadata->>'first_air_date', '')::timestamptz <= NOW(), true)
+		  )
+		ORDER BY updated_at ASC
+		LIMIT $1
+	`, cachedStreamSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending TorBox library adds: %w", err)
+	}
+	defer rows.Close()
+
+	var streams []*models.CachedStream
+	for rows.Next() {
+		cached := &models.CachedStream{}
+		if err := scanCachedStream(rows, cached); err != nil {
+			return nil, fmt.Errorf("failed to scan pending TorBox add: %w", err)
+		}
+		streams = append(streams, cached)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating pending TorBox adds: %w", err)
+	}
+	return streams, nil
+}
+
+func (s *StreamCacheStore) GetPendingTorBoxStreamOptions(ctx context.Context, limit int) ([]*models.CachedStream, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM media_stream_options
+		LEFT JOIN library_movies m ON m.id = media_stream_options.movie_id
+		LEFT JOIN library_series srs ON srs.id = media_stream_options.series_id
+		WHERE media_stream_options.is_available = true
+		  AND COALESCE(media_stream_options.stream_hash, '') <> ''
+		  AND media_stream_options.tb_library_added = false
+		  AND (
+			media_stream_options.media_type <> 'movie'
+			OR COALESCE(NULLIF(m.metadata->>'release_date', '')::timestamptz <= NOW(), true)
+		  )
+		  AND (
+			media_stream_options.media_type <> 'series'
+			OR COALESCE(NULLIF(srs.metadata->>'first_air_date', '')::timestamptz <= NOW(), true)
+		  )
+		ORDER BY media_stream_options.updated_at ASC
+		LIMIT $1
+	`, streamOptionSelectColumns)
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending TorBox stream options: %w", err)
+	}
+	defer rows.Close()
+
+	return scanStreamOptionRows(rows)
+}
+
 func (s *StreamCacheStore) MarkStreamOptionRealDebridAddedByID(ctx context.Context, optionID int, torrentID string) error {
 	query := `
 		UPDATE media_stream_options
@@ -789,12 +988,35 @@ func (s *StreamCacheStore) MarkStreamOptionRealDebridAddedByID(ctx context.Conte
 	return nil
 }
 
+func (s *StreamCacheStore) MarkStreamOptionTorBoxAddedByID(ctx context.Context, optionID int, torrentID string) error {
+	query := `
+		UPDATE media_stream_options
+		SET tb_library_added = true,
+		    tb_torrent_id = NULLIF($2, ''),
+		    last_checked = NOW(),
+		    updated_at = NOW()
+		WHERE id = $1
+	`
+
+	result, err := s.db.ExecContext(ctx, query, optionID, torrentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark TorBox stream option add: %w", err)
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("no stream option found for id %d", optionID)
+	}
+	return nil
+}
+
 func (s *StreamCacheStore) MarkStreamOptionUnavailableByID(ctx context.Context, optionID int, _ string) error {
 	query := `
 		UPDATE media_stream_options
 		SET is_available = false,
 		    rd_library_added = false,
 		    rd_torrent_id = '',
+		    tb_library_added = false,
+		    tb_torrent_id = '',
 		    last_checked = NOW(),
 		    updated_at = NOW()
 		WHERE id = $1
@@ -930,6 +1152,9 @@ func (s *StreamCacheStore) MarkUnavailableByCacheID(ctx context.Context, cacheID
 		    rd_library_added = false,
 		    rd_torrent_id = NULL,
 		    rd_library_added_at = NULL,
+		    tb_library_added = false,
+		    tb_torrent_id = NULL,
+		    tb_library_added_at = NULL,
 		    last_checked = NOW(),
 		    check_count = check_count + 1,
 		    next_check_at = NOW() + INTERVAL '1 day',
@@ -1021,6 +1246,7 @@ func scanStreamOption(scanner rowScanner, cached *models.CachedStream) error {
 	var codec sql.NullString
 	var indexer sql.NullString
 	var rdTorrentID sql.NullString
+	var tbTorrentID sql.NullString
 
 	if err := scanner.Scan(
 		&cached.ID,
@@ -1044,6 +1270,8 @@ func scanStreamOption(scanner rowScanner, cached *models.CachedStream) error {
 		&rdTorrentID,
 		&rdFileID,
 		&cached.RDLibraryAdded,
+		&tbTorrentID,
+		&cached.TBLibraryAdded,
 		&cached.CachedAt,
 		&cached.LastChecked,
 		&cached.IsAvailable,
@@ -1066,6 +1294,7 @@ func scanStreamOption(scanner rowScanner, cached *models.CachedStream) error {
 	cached.Indexer = indexer.String
 	cached.RDTorrentID = rdTorrentID.String
 	cached.RDFileID = int(rdFileID.Int64)
+	cached.TBTorrentID = tbTorrentID.String
 	cached.UpgradeAvailable = false
 	cached.CheckCount = 0
 	cached.NextCheckAt = cached.LastChecked
@@ -1093,6 +1322,8 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 	var episode sql.NullInt64
 	var rdTorrentID sql.NullString
 	var rdLibraryAddedAt sql.NullTime
+	var tbTorrentID sql.NullString
+	var tbLibraryAddedAt sql.NullTime
 
 	if err := scanner.Scan(
 		&cached.ID,
@@ -1120,6 +1351,9 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 		&cached.RDLibraryAdded,
 		&rdTorrentID,
 		&rdLibraryAddedAt,
+		&cached.TBLibraryAdded,
+		&tbTorrentID,
+		&tbLibraryAddedAt,
 		&cached.NextCheckAt,
 		&cached.CreatedAt,
 		&cached.UpdatedAt,
@@ -1137,6 +1371,18 @@ func scanCachedStream(scanner rowScanner, cached *models.CachedStream) error {
 		cached.RDLibraryAddedAt = &rdLibraryAddedAt.Time
 	} else {
 		cached.RDLibraryAddedAt = nil
+	}
+
+	if tbTorrentID.Valid {
+		cached.TBTorrentID = tbTorrentID.String
+	} else {
+		cached.TBTorrentID = ""
+	}
+
+	if tbLibraryAddedAt.Valid {
+		cached.TBLibraryAddedAt = &tbLibraryAddedAt.Time
+	} else {
+		cached.TBLibraryAddedAt = nil
 	}
 
 	if movieID.Valid {

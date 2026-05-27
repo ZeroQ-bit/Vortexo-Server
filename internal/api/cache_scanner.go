@@ -32,6 +32,8 @@ type CacheScanner struct {
 	rdSyncMu        sync.Mutex
 	rdSyncActive    bool
 	rdSyncCooldown  time.Time
+	tbSyncMu        sync.Mutex
+	tbSyncActive    bool
 	debridService   debrid.DebridService
 	settingsManager *settings.Manager
 	ticker          *time.Ticker
@@ -145,6 +147,11 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 	if cs.shouldAutoAddBestStreamsToRealDebrid() {
 		if err := cs.syncPendingRealDebridLibraryAdds(ctx); err != nil {
 			log.Printf("[CACHE-SCANNER] Warning: failed to sync existing cached streams to Real-Debrid: %v", err)
+		}
+	}
+	if cs.shouldAutoAddBestStreamsToTorBox() {
+		if err := cs.syncPendingTorBoxLibraryAdds(ctx); err != nil {
+			log.Printf("[CACHE-SCANNER] Warning: failed to sync existing cached streams to TorBox: %v", err)
 		}
 	}
 
@@ -352,6 +359,18 @@ func (cs *CacheScanner) ScanAndUpgrade(ctx context.Context) error {
 						false,
 					); err != nil {
 						log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", movie.Title, err)
+					}
+					if err := cs.maybeAddCachedStreamToTorBox(
+						ctx,
+						movie.Title,
+						stream.Hash,
+						bestStream.FileIdx,
+						func(torrentID string) error {
+							return cs.cacheStore.MarkTorBoxLibraryAddedForMovie(ctx, int(movie.ID), torrentID)
+						},
+						false,
+					); err != nil {
+						log.Printf("[CACHE-SCANNER] Warning: failed to add %s to TorBox library: %v", movie.Title, err)
 					}
 					log.Printf("[CACHE-SCANNER] ✅ Cached: %s | %s | Score: %d", movie.Title, stream.Resolution, stream.QualityScore)
 				}
@@ -616,6 +635,18 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
 				ELSE media_streams.rd_library_added_at
 			END,
+			tb_library_added = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN false
+				ELSE media_streams.tb_library_added
+			END,
+			tb_torrent_id = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.tb_torrent_id
+			END,
+			tb_library_added_at = CASE
+				WHEN media_streams.stream_hash IS DISTINCT FROM EXCLUDED.stream_hash THEN NULL
+				ELSE media_streams.tb_library_added_at
+			END,
 			updated_at = NOW()
 	`
 
@@ -640,6 +671,18 @@ func (cs *CacheScanner) scanSeriesEpisode(ctx context.Context, s *models.Series,
 		false,
 	); err != nil {
 		log.Printf("[CACHE-SCANNER] Warning: failed to add %s to Real-Debrid library: %v", seriesLabel, err)
+	}
+	if err := cs.maybeAddCachedStreamToTorBox(
+		ctx,
+		seriesLabel,
+		hash,
+		bestStream.FileIdx,
+		func(torrentID string) error {
+			return cs.cacheStore.MarkTorBoxLibraryAddedForSeriesEpisode(ctx, int(s.ID), season, episode, torrentID)
+		},
+		false,
+	); err != nil {
+		log.Printf("[CACHE-SCANNER] Warning: failed to add %s to TorBox library: %v", seriesLabel, err)
 	}
 	log.Printf("[CACHE-SCANNER] Cached series: %s S%02dE%02d | %s | Score: %d",
 		s.Title, season, episode, parsed.Resolution, qualityScore)
@@ -748,7 +791,11 @@ func (cs *CacheScanner) shouldAutoAddBestStreamsToRealDebrid() bool {
 	}
 
 	current := cs.settingsManager.Get()
-	return current != nil && current.UseRealDebrid && current.AutoAddBestStreamsToRealDebrid
+	return current != nil &&
+		current.UseRealDebrid &&
+		current.AutoAddBestStreamsToRealDebrid &&
+		strings.TrimSpace(current.RealDebridAPIKey) != "" &&
+		strings.EqualFold(cs.debridService.GetServiceName(), "Real-Debrid")
 }
 
 func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, label, hash string, fileIdx int, markAdded func(string) error, force bool) error {
@@ -758,6 +805,9 @@ func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, la
 	}
 	if !isValidHash(hash) {
 		return fmt.Errorf("invalid torrent hash %q", truncateForLog(hash, 12))
+	}
+	if cs.debridService == nil || !strings.EqualFold(cs.debridService.GetServiceName(), "Real-Debrid") {
+		return fmt.Errorf("Real-Debrid service is not initialized")
 	}
 
 	torrentID, err := cs.debridService.AddToLibrary(ctx, hash, fileIdx)
@@ -775,6 +825,70 @@ func (cs *CacheScanner) maybeAddCachedStreamToRealDebrid(ctx context.Context, la
 
 	log.Printf("[CACHE-SCANNER] Added %s to Real-Debrid library (torrent ID: %s)", label, torrentID)
 	return nil
+}
+
+func (cs *CacheScanner) shouldAutoAddBestStreamsToTorBox() bool {
+	if cs.settingsManager == nil {
+		return false
+	}
+	current := cs.settingsManager.Get()
+	return current != nil &&
+		current.UseTorBox &&
+		current.AutoAddBestStreamsToTorBox &&
+		strings.TrimSpace(current.TorBoxAPIKey) != ""
+}
+
+func (cs *CacheScanner) torBoxDebridService() debrid.DebridService {
+	if cs.settingsManager == nil {
+		return nil
+	}
+	current := cs.settingsManager.Get()
+	if current == nil || strings.TrimSpace(current.TorBoxAPIKey) == "" {
+		return nil
+	}
+	return debrid.NewTorBox(current.TorBoxAPIKey, nil)
+}
+
+func (cs *CacheScanner) maybeAddCachedStreamToTorBox(ctx context.Context, label, hash string, fileIdx int, markAdded func(string) error, force bool) error {
+	hash = normalizeTorrentHash(hash)
+	if (!force && !cs.shouldAutoAddBestStreamsToTorBox()) || hash == "" {
+		return nil
+	}
+	if !isValidHash(hash) {
+		return fmt.Errorf("invalid torrent hash %q", truncateForLog(hash, 12))
+	}
+	tb := cs.torBoxDebridService()
+	if tb == nil {
+		return fmt.Errorf("TorBox service is not initialized")
+	}
+
+	torrentID, err := tb.AddToLibrary(ctx, hash, fileIdx)
+	if err != nil {
+		if isTorBoxDuplicateError(err) {
+			log.Printf("[CACHE-SCANNER] %s already appears to exist in TorBox, marking as synced locally", label)
+			return markAdded("")
+		}
+		return err
+	}
+
+	if err := markAdded(torrentID); err != nil {
+		return err
+	}
+
+	log.Printf("[CACHE-SCANNER] Added %s to TorBox library (torrent ID: %s)", label, torrentID)
+	return nil
+}
+
+func isTorBoxDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already") ||
+		strings.Contains(msg, "duplicate") ||
+		strings.Contains(msg, "exists") ||
+		strings.Contains(msg, "active torrent") ||
+		strings.Contains(msg, "already queued")
 }
 
 func realDebridLibrarySyncRateLimitDelay(err error) time.Duration {
@@ -1068,6 +1182,226 @@ func (cs *CacheScanner) syncPendingRealDebridLibraryAddsWithMode(ctx context.Con
 		if syncedThisBatch == 0 {
 			log.Printf("[CACHE-SCANNER] Real-Debrid library sync retired %d rejected streams; continuing to next batch", retiredThisBatch)
 			services.GlobalScheduler.UpdateProgress(services.ServiceRDLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Retired %d rejected Real-Debrid streams", retiredThisBatch))
+		}
+	}
+}
+
+func (cs *CacheScanner) syncPendingTorBoxLibraryAdds(ctx context.Context) error {
+	return cs.syncPendingTorBoxLibraryAddsWithMode(ctx, false)
+}
+
+func (cs *CacheScanner) SyncPendingTorBoxLibraryAddsNow(ctx context.Context) error {
+	return cs.syncPendingTorBoxLibraryAddsWithMode(ctx, true)
+}
+
+type pendingTorBoxLibraryAdd struct {
+	stream *models.CachedStream
+	option bool
+}
+
+func (cs *CacheScanner) pendingTorBoxLibraryAdds(ctx context.Context, limit int) ([]pendingTorBoxLibraryAdd, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	legacy, err := cs.cacheStore.GetPendingTorBoxLibraryAdds(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	pending := make([]pendingTorBoxLibraryAdd, 0, limit)
+	for _, stream := range legacy {
+		pending = append(pending, pendingTorBoxLibraryAdd{stream: stream})
+	}
+
+	remaining := limit - len(pending)
+	if remaining <= 0 {
+		return pending, nil
+	}
+
+	options, err := cs.cacheStore.GetPendingTorBoxStreamOptions(ctx, remaining)
+	if err != nil {
+		return nil, err
+	}
+	for _, stream := range options {
+		pending = append(pending, pendingTorBoxLibraryAdd{stream: stream, option: true})
+	}
+	return pending, nil
+}
+
+func (cs *CacheScanner) syncPendingTorBoxLibraryAddsWithMode(ctx context.Context, force bool) error {
+	const (
+		batchSize     = 10
+		perItemDelay  = 10 * time.Second
+		progressEvery = 10
+	)
+
+	cs.tbSyncMu.Lock()
+	if cs.tbSyncActive {
+		cs.tbSyncMu.Unlock()
+		log.Printf("[CACHE-SCANNER] TorBox library sync already running, skipping duplicate request")
+		return nil
+	}
+	cs.tbSyncActive = true
+	cs.tbSyncMu.Unlock()
+	defer func() {
+		cs.tbSyncMu.Lock()
+		cs.tbSyncActive = false
+		cs.tbSyncMu.Unlock()
+	}()
+
+	if !force && !cs.shouldAutoAddBestStreamsToTorBox() {
+		return nil
+	}
+	if force && cs.torBoxDebridService() == nil {
+		return fmt.Errorf("TorBox API key is required to sync cached streams")
+	}
+
+	totalSynced := 0
+	tbAttempts := 0
+	syncedHashTorrentIDs := make(map[string]string)
+	waitForTorBoxSlot := func() error {
+		if tbAttempts == 0 {
+			tbAttempts++
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(perItemDelay):
+			tbAttempts++
+			return nil
+		}
+	}
+
+	for {
+		pending, err := cs.pendingTorBoxLibraryAdds(ctx, batchSize)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			if totalSynced == 0 {
+				log.Printf("[CACHE-SCANNER] TorBox library sync found no pending cached streams")
+				services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, 0, 0, "No pending cached streams to add to TorBox")
+			}
+			if totalSynced > 0 {
+				log.Printf("[CACHE-SCANNER] TorBox library sync complete: %d cached streams added", totalSynced)
+				services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced, fmt.Sprintf("Added %d cached streams to TorBox", totalSynced))
+			}
+			return nil
+		}
+
+		services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Syncing %d cached streams to TorBox", len(pending)))
+
+		syncedThisBatch := 0
+		retiredThisBatch := 0
+		for _, item := range pending {
+			stream := item.stream
+			if stream == nil {
+				continue
+			}
+			label := stream.MediaType + " " + strconv.Itoa(stream.MediaID)
+			if strings.TrimSpace(stream.StreamTitle) != "" {
+				label = stream.StreamTitle
+			}
+			hash := normalizeTorrentHash(stream.StreamHash)
+			if safeHash := extractHashFromURL(stream.StreamURL); isValidHash(safeHash) && safeHash != hash {
+				hash = safeHash
+				log.Printf("[CACHE-SCANNER] Recovered valid hash from stream URL for %s", label)
+			}
+			markUnavailable := cs.cacheStore.MarkUnavailableByCacheID
+			if item.option {
+				markUnavailable = cs.cacheStore.MarkStreamOptionUnavailableByID
+			}
+			if !isValidHash(hash) {
+				log.Printf("[CACHE-SCANNER] Skipping cached stream %s %d because no valid torrent hash is available", stream.MediaType, stream.MediaID)
+				if markErr := markUnavailable(ctx, stream.ID, "retired cached stream with no valid torrent hash"); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to retire cached stream %s %d with invalid hash: %v", stream.MediaType, stream.MediaID, markErr)
+				} else {
+					retiredThisBatch++
+				}
+				continue
+			}
+
+			fileIdx := firstNonZero(stream.RDFileID, extractFileIndexFromStreamURL(stream.StreamURL))
+			markAdded := cs.cacheStore.MarkTorBoxLibraryAddedByID
+			if item.option {
+				markAdded = cs.cacheStore.MarkStreamOptionTorBoxAddedByID
+			}
+
+			if torrentID, ok := syncedHashTorrentIDs[hash]; ok {
+				if markErr := markAdded(ctx, stream.ID, torrentID); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to mark duplicate cached stream %s %d as TorBox synced: %v", stream.MediaType, stream.MediaID, markErr)
+					continue
+				}
+				if markErr := cs.cacheStore.MarkTorBoxLibraryAddedByHash(ctx, hash, torrentID); markErr != nil {
+					log.Printf("[CACHE-SCANNER] Failed to mark duplicate hash %s as TorBox synced: %v", truncateForLog(hash, 12), markErr)
+				}
+				totalSynced++
+				syncedThisBatch++
+				continue
+			}
+			if err := waitForTorBoxSlot(); err != nil {
+				return err
+			}
+
+			addedTorrentID := ""
+			if err := cs.maybeAddCachedStreamToTorBox(
+				ctx,
+				label,
+				hash,
+				fileIdx,
+				func(torrentID string) error {
+					addedTorrentID = torrentID
+					if err := markAdded(ctx, stream.ID, torrentID); err != nil {
+						return err
+					}
+					return cs.cacheStore.MarkTorBoxLibraryAddedByHash(ctx, hash, torrentID)
+				},
+				force,
+			); err != nil {
+				log.Printf("[CACHE-SCANNER] Failed to sync cached stream %s %d to TorBox: %v", stream.MediaType, stream.MediaID, err)
+				if debrid.IsRateLimitError(err) {
+					services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced+len(pending), "Paused by TorBox rate limit")
+					return err
+				}
+				if isRealDebridInvalidMagnetError(err) {
+					message := fmt.Sprintf("retired invalid magnet source: %v", err)
+					if markErr := markUnavailable(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
+						log.Printf("[CACHE-SCANNER] Failed to retire invalid magnet source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
+					} else {
+						retiredThisBatch++
+					}
+					continue
+				}
+				if isRealDebridRejectedSourceError(err) {
+					message := fmt.Sprintf("retired TorBox rejected source: %v", err)
+					if markErr := markUnavailable(ctx, stream.ID, truncateForLog(message, 500)); markErr != nil {
+						log.Printf("[CACHE-SCANNER] Failed to retire TorBox rejected source %s %d: %v", stream.MediaType, stream.MediaID, markErr)
+					} else {
+						retiredThisBatch++
+					}
+					continue
+				}
+				continue
+			}
+
+			syncedHashTorrentIDs[hash] = addedTorrentID
+			totalSynced++
+			syncedThisBatch++
+			services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced+len(pending)-syncedThisBatch, fmt.Sprintf("Added %s to TorBox", label))
+			if totalSynced%progressEvery == 0 {
+				log.Printf("[CACHE-SCANNER] TorBox library sync progress: %d streams added", totalSynced)
+			}
+		}
+
+		if syncedThisBatch == 0 && retiredThisBatch == 0 {
+			log.Printf("[CACHE-SCANNER] TorBox library sync paused: no items from the current batch could be added")
+			services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced+len(pending), "No items from the current batch could be added")
+			return nil
+		}
+		if syncedThisBatch == 0 {
+			log.Printf("[CACHE-SCANNER] TorBox library sync retired %d rejected streams; continuing to next batch", retiredThisBatch)
+			services.GlobalScheduler.UpdateProgress(services.ServiceTorBoxLibrarySync, totalSynced, totalSynced+len(pending), fmt.Sprintf("Retired %d rejected TorBox streams", retiredThisBatch))
 		}
 	}
 }
