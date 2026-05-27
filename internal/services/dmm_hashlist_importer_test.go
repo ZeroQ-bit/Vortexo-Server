@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 func TestDecodeDMMHashlistHTML(t *testing.T) {
@@ -74,6 +75,22 @@ func TestBestDMMCandidatesByGroupTrustsHashlistsWhenAvailabilityDisabled(t *test
 	}
 	if best[0].Torrent.Hash != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("expected highest score candidate, got %s", best[0].Torrent.Hash)
+	}
+}
+
+func TestDMMHashlistAvailabilityUsesConfiguredAPIKeysEvenWhenProviderToggleOff(t *testing.T) {
+	if !dmmHasDebridAvailabilityProvider(&isettings.Settings{
+		UseTorBox:    false,
+		TorBoxAPIKey: "tb-key",
+	}) {
+		t.Fatal("expected TorBox API key to enable DMM availability checks")
+	}
+
+	if !dmmHasDebridAvailabilityProvider(&isettings.Settings{
+		UseRealDebrid:    false,
+		RealDebridAPIKey: "rd-key",
+	}) {
+		t.Fatal("expected Real-Debrid API key to enable DMM availability checks")
 	}
 }
 

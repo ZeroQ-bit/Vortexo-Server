@@ -647,11 +647,11 @@ func (i *DMMHashlistImporter) filterCachedCandidates(ctx context.Context, candid
 }
 
 func dmmRealDebridAvailabilityEnabled(cfg *isettings.Settings) bool {
-	return cfg != nil && cfg.UseRealDebrid && strings.TrimSpace(cfg.RealDebridAPIKey) != ""
+	return cfg != nil && strings.TrimSpace(cfg.RealDebridAPIKey) != ""
 }
 
 func dmmTorBoxAvailabilityEnabled(cfg *isettings.Settings) bool {
-	return cfg != nil && cfg.UseTorBox && strings.TrimSpace(cfg.TorBoxAPIKey) != ""
+	return cfg != nil && strings.TrimSpace(cfg.TorBoxAPIKey) != ""
 }
 
 func dmmHasDebridAvailabilityProvider(cfg *isettings.Settings) bool {
