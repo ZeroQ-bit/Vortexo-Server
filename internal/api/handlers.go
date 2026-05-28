@@ -177,7 +177,8 @@ func rdWebDAVSettingsChanged(oldSettings, newSettings *settings.Settings) bool {
 		oldSettings.RDWebDAVLibraryPath != newSettings.RDWebDAVLibraryPath ||
 		oldSettings.RDWebDAVScanIntervalMinutes != newSettings.RDWebDAVScanIntervalMinutes ||
 		oldSettings.RDWebDAVCleanStaleSymlinks != newSettings.RDWebDAVCleanStaleSymlinks ||
-		oldSettings.RDWebDAVPreferWebDAVLibraryOnly != newSettings.RDWebDAVPreferWebDAVLibraryOnly
+		oldSettings.RDWebDAVPreferWebDAVLibraryOnly != newSettings.RDWebDAVPreferWebDAVLibraryOnly ||
+		oldSettings.RDWebDAVPartialScanFallback != newSettings.RDWebDAVPartialScanFallback
 }
 
 func (h *Handler) filterMoviesForLibrary(ctx context.Context, movies []*models.Movie) []*models.Movie {

@@ -128,6 +128,7 @@ interface SettingsData {
   rd_webdav_scan_interval_minutes: number;
   rd_webdav_clean_stale_symlinks: boolean;
   rd_webdav_prefer_webdav_library_only: boolean;
+  rd_webdav_partial_scan_fallback: boolean;
   auto_add_best_streams_to_realdebrid: boolean;
   auto_add_best_streams_to_torbox: boolean;
 
@@ -638,6 +639,8 @@ export default function Settings() {
       data.rd_webdav_prefer_webdav_library_only = Boolean(
         data.rd_webdav_prefer_webdav_library_only,
       );
+      data.rd_webdav_partial_scan_fallback =
+        data.rd_webdav_partial_scan_fallback !== false;
 
       setSettings(data);
       void fetchTraktStatus();
@@ -3103,6 +3106,28 @@ export default function Settings() {
                     <div className="text-xs text-slate-400 mt-1">
                       Keep the library centered on files that exist in your
                       debrid WebDAV mount.
+                    </div>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-[#2a2a2a]/50 p-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.rd_webdav_partial_scan_fallback || false}
+                    onChange={(e) =>
+                      updateSetting(
+                        "rd_webdav_partial_scan_fallback",
+                        e.target.checked,
+                      )
+                    }
+                    className="w-4 h-4 mt-1 bg-[#2a2a2a] border-white/10 rounded"
+                  />
+                  <div>
+                    <div className="text-sm font-semibold text-white">
+                      Continue on transient mount errors
+                    </div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      If enabled, partial scan results are kept and processing
+                      continues when temporary mount/read errors occur.
                     </div>
                   </div>
                 </label>

@@ -87,6 +87,7 @@ type SettingsResponse struct {
 	RDWebDAVScanIntervalMinutes     int    `json:"rd_webdav_scan_interval_minutes"`
 	RDWebDAVCleanStaleSymlinks      bool   `json:"rd_webdav_clean_stale_symlinks"`
 	RDWebDAVPreferWebDAVLibraryOnly bool   `json:"rd_webdav_prefer_webdav_library_only"`
+	RDWebDAVPartialScanFallback     bool   `json:"rd_webdav_partial_scan_fallback"`
 
 	// Removed Comet Provider Settings
 

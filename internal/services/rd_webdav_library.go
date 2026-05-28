@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,10 +27,12 @@ import (
 )
 
 const (
-	rdWebDAVLibrarySource = "rd_webdav"
-	rdWebDAVRemoteName    = "rdwebdav"
-	rdWebDAVMinVideoBytes = 100 << 20
-	rdWebDAVMountTimeout  = 30 * time.Second
+	rdWebDAVLibrarySource   = "rd_webdav"
+	rdWebDAVRemoteName      = "rdwebdav"
+	rdWebDAVMinVideoBytes   = 100 << 20
+	rdWebDAVMountTimeout    = 30 * time.Second
+	rdWebDAVScanMaxAttempts = 4
+	rdWebDAVScanRetryDelay  = 5 * time.Second
 )
 
 var (
@@ -165,7 +168,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		return summary, fmt.Errorf("create clean library path: %w", err)
 	}
 
-	files, err := collectRDWebDAVVideoFiles(ctx, mountPath, libraryPath, summary)
+	files, err := b.collectRDWebDAVVideoFiles(ctx, mountPath, libraryPath, summary, cfg)
 	if err != nil {
 		return summary, err
 	}
@@ -374,6 +377,77 @@ func (b *RDWebDAVLibraryBuilder) remountRcloneMount(ctx context.Context, cfg *is
 	return nil
 }
 
+func (b *RDWebDAVLibraryBuilder) collectRDWebDAVVideoFiles(
+	ctx context.Context,
+	mountPath string,
+	libraryPath string,
+	summary *RDWebDAVLibrarySummary,
+	cfg *isettings.Settings,
+) ([]string, error) {
+	allowPartialFallback := true
+	if cfg != nil {
+		allowPartialFallback = cfg.RDWebDAVPartialScanFallback
+	}
+	var lastErr error
+	for attempt := 1; attempt <= rdWebDAVScanMaxAttempts; attempt++ {
+		files, collectErr := collectRDWebDAVVideoFiles(ctx, mountPath, libraryPath, summary)
+		if collectErr == nil {
+			return files, nil
+		}
+		if !isRecoverableRDWebDAVWalkError(collectErr) {
+			return files, collectErr
+		}
+		lastErr = collectErr
+		if allowPartialFallback {
+			log.Printf("[RD WebDAV] Walk error (attempt %d): %v; continuing with %d files collected so far",
+				attempt, collectErr, len(files))
+			GlobalScheduler.UpdateProgress(
+				ServiceRDWebDAVLibrary,
+				0,
+				0,
+				fmt.Sprintf("WebDAV scan hit transient mount error; continuing with partial results (%d files)", len(files)),
+			)
+			return files, nil
+		}
+
+		delay := time.Duration(attempt) * rdWebDAVScanRetryDelay
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+		GlobalScheduler.UpdateProgress(
+			ServiceRDWebDAVLibrary,
+			0,
+			0,
+			fmt.Sprintf("WebDAV mount temporarily unavailable; retrying scan in %s (%d/%d)", delay, attempt, rdWebDAVScanMaxAttempts),
+		)
+		log.Printf("[RD WebDAV] Walk error (attempt %d/%d): %v", attempt, rdWebDAVScanMaxAttempts, collectErr)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+
+		if cfg != nil && cfg.RDWebDAVMountEnabled {
+			if err := b.remountRcloneMount(ctx, cfg, mountPath, collectErr); err != nil {
+				return nil, err
+			}
+		}
+		if err := ensureReadableDir(mountPath); err != nil {
+			if cfg != nil && cfg.RDWebDAVMountEnabled && isRecoverableRDWebDAVReadError(err) {
+				continue
+			}
+			return nil, err
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("webdav walk failed after %d attempts: %w", rdWebDAVScanMaxAttempts, lastErr)
+	}
+	return nil, fmt.Errorf("webdav walk failed after %d attempts", rdWebDAVScanMaxAttempts)
+}
+
 func rdWebDAVMountFingerprint(cfg *isettings.Settings) string {
 	if cfg == nil {
 		return ""
@@ -490,10 +564,20 @@ func collectRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath strin
 	var files []string
 	mountPath, _ = filepath.Abs(mountPath)
 	libraryPath, _ = filepath.Abs(libraryPath)
+	var recoverableErr error
 	err := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if summary != nil {
 				summary.Errors++
+			}
+			if isRecoverableRDWebDAVReadError(err) {
+				if recoverableErr == nil {
+					recoverableErr = &rdWebDAVRecoverableWalkError{
+						Path: path,
+						Err:  err,
+					}
+				}
+				return nil
 			}
 			return nil
 		}
@@ -529,6 +613,15 @@ func collectRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath strin
 			if summary != nil {
 				summary.Errors++
 			}
+			if isRecoverableRDWebDAVReadError(err) {
+				if recoverableErr == nil {
+					recoverableErr = &rdWebDAVRecoverableWalkError{
+						Path: path,
+						Err:  err,
+					}
+				}
+				return nil
+			}
 			return nil
 		}
 		if info.Size() > 0 && info.Size() < rdWebDAVMinVideoBytes {
@@ -541,7 +634,31 @@ func collectRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath strin
 		return nil
 	})
 	sort.Strings(files)
+	if recoverableErr != nil {
+		return files, recoverableErr
+	}
 	return files, err
+}
+
+type rdWebDAVRecoverableWalkError struct {
+	Path string
+	Err  error
+}
+
+func (e *rdWebDAVRecoverableWalkError) Error() string {
+	return fmt.Sprintf("recoverable WebDAV walk error at %s: %v", e.Path, e.Err)
+}
+
+func (e *rdWebDAVRecoverableWalkError) Unwrap() error {
+	return e.Err
+}
+
+func isRecoverableRDWebDAVWalkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var recoverableErr *rdWebDAVRecoverableWalkError
+	return errors.As(err, &recoverableErr)
 }
 
 func parseRDWebDAVMediaFile(sourcePath string) (rdWebDAVMediaCandidate, bool) {
@@ -1148,7 +1265,11 @@ func isRecoverableRDWebDAVReadError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "input/output error") ||
+	return strings.Contains(message, "429") ||
+		strings.Contains(message, "too many requests") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "rate limited") ||
+		strings.Contains(message, "input/output error") ||
 		strings.Contains(message, "transport endpoint is not connected") ||
 		strings.Contains(message, "device not configured")
 }

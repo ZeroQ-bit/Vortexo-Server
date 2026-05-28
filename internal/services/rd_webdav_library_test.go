@@ -175,6 +175,8 @@ func TestRecoverableRDWebDAVReadError(t *testing.T) {
 		"readdirent /mnt/rd: input/output error",
 		"stat /mnt/rd: transport endpoint is not connected",
 		"open /mnt/rd: device not configured",
+		"request failed with status 429: too many requests",
+		"WebDAV mount rate limit exceeded",
 	} {
 		if !isRecoverableRDWebDAVReadError(os.NewSyscallError("test", errString(errText))) {
 			t.Fatalf("expected recoverable WebDAV read error for %q", errText)

@@ -161,6 +161,7 @@ type Settings struct {
 	RDWebDAVScanIntervalMinutes     int    `json:"rd_webdav_scan_interval_minutes"`      // Scan cadence
 	RDWebDAVCleanStaleSymlinks      bool   `json:"rd_webdav_clean_stale_symlinks"`       // Remove dead symlinks from clean library
 	RDWebDAVPreferWebDAVLibraryOnly bool   `json:"rd_webdav_prefer_webdav_library_only"` // Prefer library items built from RD WebDAV files
+	RDWebDAVPartialScanFallback     bool   `json:"rd_webdav_partial_scan_fallback"`      // Continue with partial results when mount read errors happen
 
 	// Built-in Stremio Addon Settings
 	StremioAddon StremioAddonConfig `json:"stremio_addon"`
@@ -295,6 +296,7 @@ func getDefaultSettings() *Settings {
 		RDWebDAVScanIntervalMinutes:     60,
 		RDWebDAVCleanStaleSymlinks:      true,
 		RDWebDAVPreferWebDAVLibraryOnly: false,
+		RDWebDAVPartialScanFallback:     true,
 		StremioAddons:                   []StremioAddon{}, // Empty by default - users should configure their own addons
 		StremioAddon: StremioAddonConfig{
 			Enabled:          false,
@@ -748,6 +750,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"rd_webdav_scan_interval_minutes":      m.settings.RDWebDAVScanIntervalMinutes,
 		"rd_webdav_clean_stale_symlinks":       m.settings.RDWebDAVCleanStaleSymlinks,
 		"rd_webdav_prefer_webdav_library_only": m.settings.RDWebDAVPreferWebDAVLibraryOnly,
+		"rd_webdav_partial_scan_fallback":      m.settings.RDWebDAVPartialScanFallback,
 		"total_pages":                          m.settings.TotalPages,
 		"min_year":                             m.settings.MinYear,
 		"min_runtime":                          m.settings.MinRuntime,
@@ -904,6 +907,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["rd_webdav_prefer_webdav_library_only"].(bool); ok {
 		m.settings.RDWebDAVPreferWebDAVLibraryOnly = v
+	}
+	if v, ok := updates["rd_webdav_partial_scan_fallback"].(bool); ok {
+		m.settings.RDWebDAVPartialScanFallback = v
 	}
 	if v, ok := updates["total_pages"].(float64); ok {
 		m.settings.TotalPages = int(v)
