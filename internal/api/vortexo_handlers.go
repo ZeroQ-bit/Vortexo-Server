@@ -1320,6 +1320,14 @@ func (h *Handler) vortexoRealDebridLibraryStreams(ctx context.Context, req vorte
 	if h == nil || h.rdClient == nil {
 		return nil
 	}
+	if h.settingsManager != nil {
+		current := h.settingsManager.Get()
+		if current == nil || !current.UseRealDebrid || strings.TrimSpace(current.RealDebridAPIKey) == "" {
+			return nil
+		}
+	} else if h.runtimeConfig != nil && (!h.runtimeConfig.UseRealDebrid || strings.TrimSpace(h.runtimeConfig.RealDebridAPIKey) == "") {
+		return nil
+	}
 
 	requestedTitle := firstNonEmpty(req.ParentTitle, req.Title)
 	if strings.TrimSpace(requestedTitle) == "" {

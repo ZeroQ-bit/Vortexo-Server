@@ -2,12 +2,15 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
+	"math/bits"
 	"net/http"
 	"net/url"
 	"os"
@@ -41,6 +44,8 @@ const (
 	dmmHashlistFillStateFilename    = "missing_streams_state.json"
 	dmmHashlistMovieSimilarityFloor = 0.86
 	dmmHashlistShowSimilarityFloor  = 0.88
+	dmmDirectMissingTargetsPerRun   = 30
+	dmmDirectRequestDelay           = 250 * time.Millisecond
 )
 
 var (
@@ -117,6 +122,17 @@ type DMMHashlistTorrent struct {
 	Bytes    int64  `json:"bytes"`
 }
 
+type dmmDirectAPIResponse struct {
+	Results      []dmmDirectSearchResult `json:"results,omitempty"`
+	ErrorMessage string                  `json:"errorMessage,omitempty"`
+}
+
+type dmmDirectSearchResult struct {
+	Title    string  `json:"title"`
+	FileSize float64 `json:"fileSize"`
+	Hash     string  `json:"hash"`
+}
+
 type dmmCandidate struct {
 	MediaType string
 	Title     string
@@ -125,6 +141,23 @@ type dmmCandidate struct {
 	Episode   int
 	Torrent   DMMHashlistTorrent
 	Stream    models.TorrentStream
+}
+
+type dmmMissingMovieTarget struct {
+	ID     int64
+	TMDBID int
+	IMDBID string
+	Title  string
+	Year   int
+}
+
+type dmmMissingEpisodeTarget struct {
+	SeriesID int64
+	IMDBID   string
+	Title    string
+	Year     int
+	Season   int
+	Episode  int
 }
 
 type dmmHashlistImportMode string
@@ -215,6 +248,14 @@ func (i *DMMHashlistImporter) importWithMode(ctx context.Context, mode dmmHashli
 	}
 	if !dmmHasDebridAvailabilityProvider(cfg) {
 		return summary, fmt.Errorf("Real-Debrid or TorBox API key is required to verify DMM hashes are cached")
+	}
+
+	if mode == dmmHashlistFillMissing {
+		if directSummary, handled, directErr := i.fillMissingLibraryStreamsFromDMMDirect(ctx, cfg); handled {
+			return directSummary, directErr
+		} else if directErr != nil {
+			log.Printf("[DMM Direct] Direct missing-stream fill failed before selecting targets; falling back to hashlist scan: %v", directErr)
+		}
 	}
 
 	state, err := i.loadState(mode.stateFilename())
@@ -520,6 +561,458 @@ func normalizeDMMTorrents(torrents []DMMHashlistTorrent) []DMMHashlistTorrent {
 	return normalized
 }
 
+func (i *DMMHashlistImporter) fillMissingLibraryStreamsFromDMMDirect(ctx context.Context, cfg *isettings.Settings) (*DMMHashlistImportSummary, bool, error) {
+	summary := &DMMHashlistImportSummary{}
+	if i.streamCacheStore == nil || i.movieStore == nil || i.seriesStore == nil {
+		return summary, false, nil
+	}
+
+	movieTargets, err := i.listDMMDirectMissingMovieTargets(ctx, dmmDirectMissingTargetsPerRun)
+	if err != nil {
+		return summary, false, err
+	}
+	remaining := dmmDirectMissingTargetsPerRun - len(movieTargets)
+	if remaining < 0 {
+		remaining = 0
+	}
+	episodeTargets, err := i.listDMMDirectMissingEpisodeTargets(ctx, remaining)
+	if err != nil {
+		return summary, false, err
+	}
+
+	totalTargets := len(movieTargets) + len(episodeTargets)
+	if totalTargets == 0 {
+		return summary, false, nil
+	}
+	summary.FilesTotal = totalTargets
+
+	for idx, target := range movieTargets {
+		if err := ctx.Err(); err != nil {
+			return summary, true, err
+		}
+		GlobalScheduler.UpdateProgress(
+			ServiceDMMHashlistImport,
+			idx+1,
+			totalTargets,
+			fmt.Sprintf("DMM direct fill: %s", target.Title),
+		)
+		cached, err := i.fillDMMDirectMovieTarget(ctx, cfg, target, summary)
+		if err != nil {
+			summary.Errors++
+			log.Printf("[DMM Direct] Movie fill failed for %s (%s): %v", target.Title, target.IMDBID, err)
+		} else if cached {
+			summary.StreamsCached++
+		}
+		summary.FilesProcessed++
+		sleepDMMDirectRequestDelay(ctx)
+	}
+
+	seasonCache := make(map[string][]DMMHashlistTorrent)
+	for idx, target := range episodeTargets {
+		if err := ctx.Err(); err != nil {
+			return summary, true, err
+		}
+		GlobalScheduler.UpdateProgress(
+			ServiceDMMHashlistImport,
+			len(movieTargets)+idx+1,
+			totalTargets,
+			fmt.Sprintf("DMM direct fill: %s S%02dE%02d", target.Title, target.Season, target.Episode),
+		)
+		cached, err := i.fillDMMDirectEpisodeTarget(ctx, cfg, target, summary, seasonCache)
+		if err != nil {
+			summary.Errors++
+			log.Printf("[DMM Direct] Episode fill failed for %s S%02dE%02d (%s): %v", target.Title, target.Season, target.Episode, target.IMDBID, err)
+		} else if cached {
+			summary.StreamsCached++
+		}
+		summary.FilesProcessed++
+		sleepDMMDirectRequestDelay(ctx)
+	}
+
+	GlobalScheduler.UpdateProgress(
+		ServiceDMMHashlistImport,
+		summary.FilesProcessed,
+		summary.FilesTotal,
+		fmt.Sprintf("DMM direct missing-stream fill complete: %d cached streams", summary.StreamsCached),
+	)
+	log.Printf("[DMM Direct] Missing-stream fill complete: targets=%d torrents=%d candidates=%d cached=%d streams=%d errors=%d",
+		summary.FilesProcessed, summary.TorrentsSeen, summary.CandidatesMatched, summary.CachedCandidates, summary.StreamsCached, summary.Errors)
+	return summary, true, nil
+}
+
+func (i *DMMHashlistImporter) listDMMDirectMissingMovieTargets(ctx context.Context, limit int) ([]dmmMissingMovieTarget, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := `
+		SELECT
+			m.id,
+			m.tmdb_id,
+			COALESCE(NULLIF(m.imdb_id, ''), NULLIF(m.metadata->>'imdb_id', '')) AS imdb_id,
+			m.title,
+			COALESCE(m.year, 0) AS year
+		FROM library_movies m
+		WHERE m.monitored = true
+		  AND COALESCE(NULLIF(m.imdb_id, ''), NULLIF(m.metadata->>'imdb_id', '')) <> ''
+		  AND COALESCE(NULLIF(m.metadata->>'release_date', '')::timestamptz <= NOW(), true)
+		  AND NOT EXISTS (
+			SELECT 1 FROM media_streams ms
+			WHERE ms.movie_id = m.id
+			  AND ms.is_available = true
+			  AND COALESCE(ms.stream_hash, '') <> ''
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM media_stream_options so
+			WHERE so.movie_id = m.id
+			  AND so.is_available = true
+			  AND COALESCE(so.stream_hash, '') <> ''
+		  )
+		ORDER BY m.added_at DESC
+		LIMIT $1
+	`
+	rows, err := i.movieStore.GetDB().QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list DMM direct missing movies: %w", err)
+	}
+	defer rows.Close()
+
+	targets := make([]dmmMissingMovieTarget, 0, limit)
+	for rows.Next() {
+		var target dmmMissingMovieTarget
+		if err := rows.Scan(&target.ID, &target.TMDBID, &target.IMDBID, &target.Title, &target.Year); err != nil {
+			return nil, fmt.Errorf("scan DMM direct missing movie: %w", err)
+		}
+		target.IMDBID = normalizeDMMDirectIMDBID(target.IMDBID)
+		if target.ID > 0 && target.IMDBID != "" {
+			targets = append(targets, target)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate DMM direct missing movies: %w", err)
+	}
+	return targets, nil
+}
+
+func (i *DMMHashlistImporter) listDMMDirectMissingEpisodeTargets(ctx context.Context, limit int) ([]dmmMissingEpisodeTarget, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := `
+		SELECT
+			s.id,
+			COALESCE(NULLIF(s.imdb_id, ''), NULLIF(s.metadata->>'imdb_id', '')) AS imdb_id,
+			s.title,
+			COALESCE(s.year, 0) AS year,
+			e.season_number,
+			e.episode_number
+		FROM library_episodes e
+		JOIN library_series s ON s.id = e.series_id
+		WHERE s.monitored = true
+		  AND e.monitored = true
+		  AND e.season_number > 0
+		  AND e.episode_number > 0
+		  AND (e.air_date IS NULL OR e.air_date <= CURRENT_DATE)
+		  AND COALESCE(NULLIF(s.imdb_id, ''), NULLIF(s.metadata->>'imdb_id', '')) <> ''
+		  AND NOT EXISTS (
+			SELECT 1 FROM media_streams ms
+			WHERE ms.series_id = s.id
+			  AND ms.season = e.season_number
+			  AND ms.episode = e.episode_number
+			  AND ms.is_available = true
+			  AND COALESCE(ms.stream_hash, '') <> ''
+		  )
+		  AND NOT EXISTS (
+			SELECT 1 FROM media_stream_options so
+			WHERE so.series_id = s.id
+			  AND so.season = e.season_number
+			  AND so.episode = e.episode_number
+			  AND so.is_available = true
+			  AND COALESCE(so.stream_hash, '') <> ''
+		  )
+		ORDER BY e.last_checked NULLS FIRST, s.added_at DESC, e.season_number ASC, e.episode_number ASC
+		LIMIT $1
+	`
+	rows, err := i.seriesStore.GetDB().QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list DMM direct missing episodes: %w", err)
+	}
+	defer rows.Close()
+
+	targets := make([]dmmMissingEpisodeTarget, 0, limit)
+	for rows.Next() {
+		var target dmmMissingEpisodeTarget
+		if err := rows.Scan(&target.SeriesID, &target.IMDBID, &target.Title, &target.Year, &target.Season, &target.Episode); err != nil {
+			return nil, fmt.Errorf("scan DMM direct missing episode: %w", err)
+		}
+		target.IMDBID = normalizeDMMDirectIMDBID(target.IMDBID)
+		if target.SeriesID > 0 && target.IMDBID != "" {
+			targets = append(targets, target)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate DMM direct missing episodes: %w", err)
+	}
+	return targets, nil
+}
+
+func (i *DMMHashlistImporter) fillDMMDirectMovieTarget(ctx context.Context, cfg *isettings.Settings, target dmmMissingMovieTarget, summary *DMMHashlistImportSummary) (bool, error) {
+	torrents, err := i.fetchDMMDirectTorrents(ctx, cfg, "movie", target.IMDBID, 0)
+	if err != nil {
+		return false, err
+	}
+	summary.TorrentsSeen += len(torrents)
+	candidates := make([]dmmCandidate, 0, len(torrents))
+	for _, torrent := range torrents {
+		candidate, ok := i.dmmDirectCandidateFromTorrent(torrent, cfg, "movie", target.Title, target.Year, 0, 0)
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+	summary.CandidatesMatched += len(candidates)
+	if len(candidates) == 0 {
+		return false, nil
+	}
+	cachedCandidates, err := i.filterCachedCandidates(ctx, candidates, cfg)
+	if err != nil {
+		return false, err
+	}
+	summary.CachedCandidates += len(cachedCandidates)
+	if len(cachedCandidates) == 0 {
+		return false, nil
+	}
+	return i.cacheMovieCandidateStream(ctx, target.ID, cachedCandidates[0])
+}
+
+func (i *DMMHashlistImporter) fillDMMDirectEpisodeTarget(
+	ctx context.Context,
+	cfg *isettings.Settings,
+	target dmmMissingEpisodeTarget,
+	summary *DMMHashlistImportSummary,
+	seasonCache map[string][]DMMHashlistTorrent,
+) (bool, error) {
+	cacheKey := fmt.Sprintf("%s:%d", target.IMDBID, target.Season)
+	torrents, ok := seasonCache[cacheKey]
+	if !ok {
+		var err error
+		torrents, err = i.fetchDMMDirectTorrents(ctx, cfg, "series", target.IMDBID, target.Season)
+		if err != nil {
+			return false, err
+		}
+		seasonCache[cacheKey] = torrents
+		summary.TorrentsSeen += len(torrents)
+	}
+	candidates := make([]dmmCandidate, 0, len(torrents))
+	for _, torrent := range torrents {
+		if !dmmTorrentCanMatchEpisode(torrent, target.Season, target.Episode) {
+			continue
+		}
+		candidate, ok := i.dmmDirectCandidateFromTorrent(torrent, cfg, "series", target.Title, target.Year, target.Season, target.Episode)
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+	}
+	summary.CandidatesMatched += len(candidates)
+	if len(candidates) == 0 {
+		return false, nil
+	}
+	cachedCandidates, err := i.filterCachedCandidates(ctx, candidates, cfg)
+	if err != nil {
+		return false, err
+	}
+	summary.CachedCandidates += len(cachedCandidates)
+	if len(cachedCandidates) == 0 {
+		return false, nil
+	}
+	return i.cacheSeriesCandidateStream(ctx, target.SeriesID, cachedCandidates[0])
+}
+
+func (i *DMMHashlistImporter) dmmDirectCandidateFromTorrent(torrent DMMHashlistTorrent, cfg *isettings.Settings, mediaType, title string, year, season, episode int) (dmmCandidate, bool) {
+	torrent.Filename = strings.TrimSpace(torrent.Filename)
+	torrent.Hash = normalizeDMMHash(torrent.Hash)
+	if torrent.Filename == "" || !isValidDMMHash(torrent.Hash) {
+		return dmmCandidate{}, false
+	}
+	if !i.torrentAllowedByReleaseFilters(torrent, cfg) {
+		return dmmCandidate{}, false
+	}
+	candidate := dmmCandidate{
+		MediaType: mediaType,
+		Title:     strings.TrimSpace(title),
+		Year:      year,
+		Season:    season,
+		Episode:   episode,
+		Torrent:   torrent,
+		Stream:    i.streamFromDMMTorrent(torrent),
+	}
+	if candidate.Title == "" {
+		candidate.Title = strings.TrimSpace(torrent.Filename)
+	}
+	return candidate, true
+}
+
+func (i *DMMHashlistImporter) fetchDMMDirectTorrents(ctx context.Context, cfg *isettings.Settings, mediaType, imdbID string, season int) ([]DMMHashlistTorrent, error) {
+	imdbID = normalizeDMMDirectIMDBID(imdbID)
+	if imdbID == "" {
+		return nil, nil
+	}
+	tokenWithTimestamp, tokenHash := generateDMMDirectToken()
+	values := url.Values{}
+	values.Set("imdbId", imdbID)
+	values.Set("dmmProblemKey", tokenWithTimestamp)
+	values.Set("solution", tokenHash)
+	values.Set("onlyTrusted", "false")
+
+	endpoint := "/api/torrents/movie"
+	if mediaType == "series" {
+		endpoint = "/api/torrents/tv"
+		values.Set("seasonNum", strconv.Itoa(season))
+	}
+	reqURL := dmmDirectBaseURL(cfg) + endpoint + "?" + values.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", dmmHashlistRequestUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := i.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("DMM direct API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload dmmDirectAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(payload.ErrorMessage) != "" {
+		return nil, fmt.Errorf("DMM direct API error: %s", strings.TrimSpace(payload.ErrorMessage))
+	}
+	torrents := make([]DMMHashlistTorrent, 0, len(payload.Results))
+	for _, result := range payload.Results {
+		bytes := int64(0)
+		if result.FileSize > 0 {
+			bytes = int64(result.FileSize * 1024 * 1024)
+		}
+		torrent := DMMHashlistTorrent{
+			Filename: strings.TrimSpace(result.Title),
+			Hash:     normalizeDMMHash(result.Hash),
+			Bytes:    bytes,
+		}
+		if torrent.Filename != "" && isValidDMMHash(torrent.Hash) {
+			torrents = append(torrents, torrent)
+		}
+	}
+	return torrents, nil
+}
+
+func dmmDirectBaseURL(cfg *isettings.Settings) string {
+	baseURL := ""
+	if cfg != nil {
+		baseURL = strings.TrimSpace(cfg.DMMProviderURL)
+	}
+	if baseURL == "" {
+		baseURL = "https://debridmediamanager.com"
+	}
+	return strings.TrimRight(baseURL, "/")
+}
+
+func dmmTorrentCanMatchEpisode(torrent DMMHashlistTorrent, season, episode int) bool {
+	parsed, ok := parseDMMFilename(torrent.Filename)
+	if !ok || parsed.MediaType != "series" {
+		return true
+	}
+	return parsed.Season == season && parsed.Episode == episode
+}
+
+func normalizeDMMDirectIMDBID(imdbID string) string {
+	imdbID = strings.TrimSpace(imdbID)
+	if imdbID == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(imdbID), "tt") {
+		return imdbID
+	}
+	return "tt" + imdbID
+}
+
+func generateDMMDirectToken() (string, string) {
+	token := generateRandomDMMDirectToken()
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	tokenWithTimestamp := fmt.Sprintf("%s-%s", token, timestamp)
+	tokenTimestampHash := generateDMMDirectHash(tokenWithTimestamp)
+	tokenSaltHash := generateDMMDirectHash("debridmediamanager.com%%fe7#td00rA3vHz%VmI-" + token)
+	return tokenWithTimestamp, combineDMMDirectHashes(tokenTimestampHash, tokenSaltHash)
+}
+
+func generateRandomDMMDirectToken() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return strconv.FormatUint(uint64(binary.BigEndian.Uint32(b[:])), 16)
+}
+
+func generateDMMDirectHash(value string) string {
+	hash1 := uint32(0xdeadbeef) ^ uint32(len(value))
+	hash2 := uint32(0x41c6ce57) ^ uint32(len(value))
+	for _, char := range value {
+		charCode := uint32(char)
+		hash1 = bits.RotateLeft32((hash1^charCode)*2654435761, 5)
+		hash2 = bits.RotateLeft32((hash2^charCode)*1597334677, 5)
+	}
+	hash1 = hash1 + hash2*1566083941
+	hash2 = hash2 + hash1*2024237689
+	return strconv.FormatUint(uint64(hash1^hash2), 16)
+}
+
+func combineDMMDirectHashes(hash1, hash2 string) string {
+	halfLength := len(hash1) / 2
+	firstPart1 := hash1[:halfLength]
+	secondPart1 := hash1[halfLength:]
+	firstPart2 := hash2
+	secondPart2 := ""
+	if len(hash2) > halfLength {
+		firstPart2 = hash2[:halfLength]
+		secondPart2 = hash2[halfLength:]
+	}
+
+	var builder strings.Builder
+	for idx := 0; idx < halfLength; idx++ {
+		builder.WriteByte(firstPart1[idx])
+		if idx < len(firstPart2) {
+			builder.WriteByte(firstPart2[idx])
+		}
+	}
+	builder.WriteString(reverseDMMDirectString(secondPart2))
+	builder.WriteString(reverseDMMDirectString(secondPart1))
+	return builder.String()
+}
+
+func reverseDMMDirectString(value string) string {
+	runes := []rune(value)
+	for left, right := 0, len(runes)-1; left < right; left, right = left+1, right-1 {
+		runes[left], runes[right] = runes[right], runes[left]
+	}
+	return string(runes)
+}
+
+func sleepDMMDirectRequestDelay(ctx context.Context) {
+	timer := time.NewTimer(dmmDirectRequestDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
 func (i *DMMHashlistImporter) candidateFromTorrent(torrent DMMHashlistTorrent, cfg *isettings.Settings) (dmmCandidate, bool) {
 	if !i.torrentAllowedByReleaseFilters(torrent, cfg) {
 		return dmmCandidate{}, false
@@ -530,7 +1023,12 @@ func (i *DMMHashlistImporter) candidateFromTorrent(torrent DMMHashlistTorrent, c
 		return dmmCandidate{}, false
 	}
 	parsed.Torrent = torrent
+	parsed.Stream = i.streamFromDMMTorrent(torrent)
 
+	return parsed, true
+}
+
+func (i *DMMHashlistImporter) streamFromDMMTorrent(torrent DMMHashlistTorrent) models.TorrentStream {
 	stream := i.streamScorer.ParseStreamFromTorrentName(torrent.Filename, torrent.Hash, dmmHashlistIndexer, 0)
 	if torrent.Bytes > 0 {
 		stream.SizeGB = float64(torrent.Bytes) / (1024 * 1024 * 1024)
@@ -552,9 +1050,7 @@ func (i *DMMHashlistImporter) candidateFromTorrent(torrent DMMHashlistTorrent, c
 	stream.Title = torrent.Filename
 	stream.TorrentName = torrent.Filename
 	stream.Indexer = dmmHashlistIndexer
-	parsed.Stream = stream
-
-	return parsed, true
+	return stream
 }
 
 func (i *DMMHashlistImporter) torrentAllowedByReleaseFilters(torrent DMMHashlistTorrent, cfg *isettings.Settings) bool {
