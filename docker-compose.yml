@@ -26,13 +26,14 @@ services:
       # - RD_API_KEY=your_realdebrid_key
       # - MDBLIST_API_KEY=your_mdblist_key
     volumes:
-      - streamarr_cache:/app/cache
-      - streamarr_logs:/app/logs
-      - ${UMBREL_ROOT}/data/storage/downloads:/app/rd-library
-      - ./channels:/app/channels
-      - ./proxies.txt:/app/proxies.txt:ro  # Mount proxy file (read-only)
-      - /var/run/docker.sock:/var/run/docker.sock  # Allow container to control Docker
-      - .:/app/host  # Mount host directory for git operations
+    volumes:
+        - streamarr_cache:/app/cache
+        - streamarr_logs:/app/logs
+        - ${UMBREL_ROOT}/data/storage/downloads:/app/rd-library:rslave
+        - ./channels:/app/channels
+        - ./proxies.txt:/app/proxies.txt:ro
+        - /var/run/docker.sock:/var/run/docker.sock
+        - .:/app/host
     depends_on:
       postgres:
         condition: service_healthy
