@@ -626,10 +626,10 @@ export default function Settings() {
         data.rd_webdav_url = "https://dav.real-debrid.com";
       }
       if (!data.rd_webdav_mount_path) {
-        data.rd_webdav_mount_path = "/mnt/rd";
+        data.rd_webdav_mount_path = "/downloads/.vortexo-source";
       }
       if (!data.rd_webdav_library_path) {
-        data.rd_webdav_library_path = "/app/rd-library";
+        data.rd_webdav_library_path = "/downloads/vortexo";
       }
       if (!data.rd_webdav_scan_interval_minutes) {
         data.rd_webdav_scan_interval_minutes = 60;
@@ -3043,7 +3043,7 @@ export default function Settings() {
                         updateSetting("rd_webdav_mount_path", e.target.value)
                       }
                       className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      placeholder="/mnt/rd"
+                      placeholder="/downloads/.vortexo-source"
                     />
                   </div>
                   <div>
@@ -3057,7 +3057,7 @@ export default function Settings() {
                         updateSetting("rd_webdav_library_path", e.target.value)
                       }
                       className="w-full px-3 py-2 bg-[#2a2a2a] border border-white/10 rounded-lg text-white focus:outline-none focus:border-blue-500"
-                      placeholder="/app/rd-library"
+                      placeholder="/downloads/vortexo"
                     />
                   </div>
                 </div>

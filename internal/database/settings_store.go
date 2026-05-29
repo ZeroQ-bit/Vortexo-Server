@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/models"
+	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 )
 
 type SettingsStore struct {
@@ -181,8 +182,8 @@ func (s *SettingsStore) mapToResponse(m map[string]string) *models.SettingsRespo
 		RDWebDAVURL:                     getStringWithDefault("rd_webdav_url", "https://dav.real-debrid.com"),
 		RDWebDAVUsername:                getString("rd_webdav_username"),
 		RDWebDAVPassword:                getString("rd_webdav_password"),
-		RDWebDAVMountPath:               getStringWithDefault("rd_webdav_mount_path", "/mnt/rd"),
-		RDWebDAVLibraryPath:             getStringWithDefault("rd_webdav_library_path", "/app/rd-library"),
+		RDWebDAVMountPath:               migrateRDWebDAVPath(getStringWithDefault("rd_webdav_mount_path", isettings.DefaultRDWebDAVMountPath), isettings.LegacyRDWebDAVMountPath, isettings.DefaultRDWebDAVMountPath),
+		RDWebDAVLibraryPath:             migrateRDWebDAVPath(getStringWithDefault("rd_webdav_library_path", isettings.DefaultRDWebDAVLibraryPath), isettings.LegacyRDWebDAVLibraryPath, isettings.DefaultRDWebDAVLibraryPath),
 		RDWebDAVScanIntervalMinutes:     getInt("rd_webdav_scan_interval_minutes", 60),
 		RDWebDAVCleanStaleSymlinks:      getBoolWithDefault("rd_webdav_clean_stale_symlinks", true),
 		RDWebDAVPreferWebDAVLibraryOnly: getBool("rd_webdav_prefer_webdav_library_only"),
@@ -207,6 +208,13 @@ func (s *SettingsStore) mapToResponse(m map[string]string) *models.SettingsRespo
 		XtreamUsername:                  getStringWithDefault("xtream_username", "streamarr"),
 		XtreamPassword:                  getStringWithDefault("xtream_password", "streamarr"),
 	}
+}
+
+func migrateRDWebDAVPath(path, legacyDefault, currentDefault string) string {
+	if path == legacyDefault {
+		return currentDefault
+	}
+	return path
 }
 
 func (s *SettingsStore) responseToMap(r *models.SettingsResponse) map[string]string {

@@ -7,6 +7,13 @@ import (
 	"sync"
 )
 
+const (
+	DefaultRDWebDAVMountPath   = "/downloads/.vortexo-source"
+	DefaultRDWebDAVLibraryPath = "/downloads/vortexo"
+	LegacyRDWebDAVMountPath    = "/mnt/rd"
+	LegacyRDWebDAVLibraryPath  = "/app/rd-library"
+)
+
 // M3USource represents a custom M3U playlist source for Live TV
 type M3USource struct {
 	Name               string   `json:"name"`
@@ -291,8 +298,8 @@ func getDefaultSettings() *Settings {
 		RDWebDAVLibraryEnabled:          false,
 		RDWebDAVMountEnabled:            false,
 		RDWebDAVURL:                     "https://dav.real-debrid.com",
-		RDWebDAVMountPath:               "/mnt/rd",
-		RDWebDAVLibraryPath:             "/app/rd-library",
+		RDWebDAVMountPath:               DefaultRDWebDAVMountPath,
+		RDWebDAVLibraryPath:             DefaultRDWebDAVLibraryPath,
 		RDWebDAVScanIntervalMinutes:     60,
 		RDWebDAVCleanStaleSymlinks:      true,
 		RDWebDAVPreferWebDAVLibraryOnly: false,

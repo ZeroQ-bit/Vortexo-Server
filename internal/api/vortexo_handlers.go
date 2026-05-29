@@ -23,6 +23,7 @@ import (
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/services"
 	"github.com/ZeroQ-bit/Vortexo-Server/internal/services/debrid"
 	streammeta "github.com/ZeroQ-bit/Vortexo-Server/internal/services/streams"
+	isettings "github.com/ZeroQ-bit/Vortexo-Server/internal/settings"
 	"github.com/gorilla/mux"
 )
 
@@ -2312,8 +2313,8 @@ func (h *Handler) safeVortexoLocalFilePath(rawPath string) (string, error) {
 }
 
 func (h *Handler) vortexoLocalFileRoots() []string {
-	libraryPath := "/app/rd-library"
-	mountPath := "/mnt/rd"
+	libraryPath := isettings.DefaultRDWebDAVLibraryPath
+	mountPath := isettings.DefaultRDWebDAVMountPath
 	if h != nil && h.settingsManager != nil {
 		cfg := h.settingsManager.Get()
 		if strings.TrimSpace(cfg.RDWebDAVLibraryPath) != "" {

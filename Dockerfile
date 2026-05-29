@@ -109,7 +109,7 @@ RUN dos2unix update.sh build.sh start.sh stop.sh entrypoint.sh load_proxies.sh &
     chmod +x update.sh build.sh start.sh stop.sh entrypoint.sh load_proxies.sh
 
 # Create directories
-RUN mkdir -p /app/logs /app/cache /app/sessions /app/rd-mount /mnt/rd
+RUN mkdir -p /app/logs /app/cache /app/sessions /downloads/vortexo /downloads/.vortexo-source
 
 # Expose port
 EXPOSE 8080

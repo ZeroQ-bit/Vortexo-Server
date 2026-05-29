@@ -26,10 +26,8 @@ services:
       # - RD_API_KEY=your_realdebrid_key
       # - MDBLIST_API_KEY=your_mdblist_key
     volumes:
-    volumes:
         - streamarr_cache:/app/cache
         - streamarr_logs:/app/logs
-        - ${UMBREL_ROOT}/data/storage/downloads:/app/rd-library:rslave
         - ${UMBREL_ROOT}/data/storage/downloads:/downloads:rshared
         - ./channels:/app/channels
         - ./proxies.txt:/app/proxies.txt:ro

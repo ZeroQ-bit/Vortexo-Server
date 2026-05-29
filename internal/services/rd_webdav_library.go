@@ -145,8 +145,8 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		return summary, fmt.Errorf("TMDB API key is required for debrid WebDAV library matching")
 	}
 
-	mountPath := cleanConfiguredPath(cfg.RDWebDAVMountPath, "/mnt/rd")
-	libraryPath := cleanConfiguredPath(cfg.RDWebDAVLibraryPath, "/app/rd-library")
+	mountPath := cleanConfiguredPath(cfg.RDWebDAVMountPath, isettings.DefaultRDWebDAVMountPath)
+	libraryPath := cleanConfiguredPath(cfg.RDWebDAVLibraryPath, isettings.DefaultRDWebDAVLibraryPath)
 	if cfg.RDWebDAVMountEnabled {
 		if err := b.ensureRcloneMount(ctx, cfg, mountPath); err != nil {
 			return summary, err
