@@ -168,68 +168,12 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		return summary, fmt.Errorf("create clean library path: %w", err)
 	}
 
-	files, err := b.collectRDWebDAVVideoFiles(ctx, mountPath, libraryPath, summary, cfg)
-	if err != nil {
+	if err := b.scanRDWebDAVVideoFiles(ctx, mountPath, libraryPath, summary, cfg); err != nil {
 		return summary, err
 	}
-	summary.VideoFiles = len(files)
-	if len(files) == 0 {
+	if summary.VideoFiles == 0 {
 		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, 0, 0, "No video files found in debrid WebDAV mount")
 		return summary, nil
-	}
-
-	for idx, sourcePath := range files {
-		select {
-		case <-ctx.Done():
-			return summary, ctx.Err()
-		default:
-		}
-
-		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, idx+1, len(files), fmt.Sprintf("Matching %s", filepath.Base(sourcePath)))
-		candidate, ok := parseRDWebDAVMediaFile(sourcePath)
-		if !ok {
-			summary.Skipped++
-			continue
-		}
-		if info, err := os.Stat(sourcePath); err == nil {
-			candidate.SizeBytes = info.Size()
-		}
-
-		switch candidate.MediaType {
-		case "episode":
-			created, updated, linkState, err := b.importWebDAVEpisode(ctx, cfg, candidate, libraryPath)
-			if err != nil {
-				summary.Errors++
-				log.Printf("[RD WebDAV] Episode import failed for %s: %v", sourcePath, err)
-				continue
-			}
-			if created {
-				summary.SeriesAdded++
-			} else {
-				summary.SeriesUpdated++
-			}
-			if updated {
-				summary.EpisodesUpdated++
-			} else {
-				summary.EpisodesAdded++
-			}
-			recordSymlinkState(summary, linkState)
-		case "movie":
-			created, linkState, err := b.importWebDAVMovie(ctx, cfg, candidate, libraryPath)
-			if err != nil {
-				summary.Errors++
-				log.Printf("[RD WebDAV] Movie import failed for %s: %v", sourcePath, err)
-				continue
-			}
-			if created {
-				summary.MoviesAdded++
-			} else {
-				summary.MoviesUpdated++
-			}
-			recordSymlinkState(summary, linkState)
-		default:
-			summary.Skipped++
-		}
 	}
 
 	if cfg.RDWebDAVCleanStaleSymlinks {
@@ -243,8 +187,8 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 
 	GlobalScheduler.UpdateProgress(
 		ServiceRDWebDAVLibrary,
-		len(files),
-		len(files),
+		summary.VideoFiles,
+		summary.VideoFiles,
 		fmt.Sprintf("Debrid WebDAV scan complete: %d movies, %d episodes, %d symlinks", summary.MoviesAdded+summary.MoviesUpdated, summary.EpisodesAdded+summary.EpisodesUpdated, summary.SymlinksCreated+summary.SymlinksUpdated),
 	)
 	log.Printf("[RD WebDAV] Scan complete: %+v", summary)
@@ -508,6 +452,10 @@ func unmountRDWebDAVPath(ctx context.Context, mountPath string) error {
 func buildRDWebDAVRcloneMountArgs(configPath, mountPath string) []string {
 	return []string{
 		"--config", configPath,
+		"--retries", "1",
+		"--low-level-retries", "2",
+		"--contimeout", "10s",
+		"--timeout", "20s",
 		"mount", rdWebDAVRemoteName + ":", mountPath,
 		"--read-only",
 		"--allow-other",
@@ -558,6 +506,134 @@ func compactRcloneOutput(output string) string {
 		return output[len(output)-maxLen:]
 	}
 	return output
+}
+
+func (b *RDWebDAVLibraryBuilder) scanRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath string, summary *RDWebDAVLibrarySummary, cfg *isettings.Settings) error {
+	mountPath, _ = filepath.Abs(mountPath)
+	libraryPath, _ = filepath.Abs(libraryPath)
+	var recoverableErr error
+	err := filepath.WalkDir(mountPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if summary != nil {
+				summary.Errors++
+			}
+			if isRecoverableRDWebDAVReadError(err) {
+				if recoverableErr == nil {
+					recoverableErr = &rdWebDAVRecoverableWalkError{Path: path, Err: err}
+				}
+				return nil
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if sameOrDescendant(path, libraryPath) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			name := strings.ToLower(d.Name())
+			if path != mountPath && (strings.HasPrefix(name, ".") || rdWebDAVScannerSkipFolders[name]) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		if summary != nil {
+			summary.FilesSeen++
+		}
+		if !isRDWebDAVVideoFile(path) {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			if summary != nil {
+				summary.Errors++
+			}
+			if isRecoverableRDWebDAVReadError(err) {
+				if recoverableErr == nil {
+					recoverableErr = &rdWebDAVRecoverableWalkError{Path: path, Err: err}
+				}
+				return nil
+			}
+			return nil
+		}
+		if info.Size() > 0 && info.Size() < rdWebDAVMinVideoBytes {
+			if summary != nil {
+				summary.Skipped++
+			}
+			return nil
+		}
+
+		summary.VideoFiles++
+		if summary.VideoFiles == 1 || summary.VideoFiles%25 == 0 {
+			log.Printf("[RD WebDAV] Discovered %d video file(s); latest: %s", summary.VideoFiles, path)
+		}
+		GlobalScheduler.UpdateProgress(ServiceRDWebDAVLibrary, summary.VideoFiles, 0, fmt.Sprintf("Matching %s", filepath.Base(path)))
+
+		if err := b.importRDWebDAVVideoFile(ctx, cfg, path, info.Size(), libraryPath, summary); err != nil {
+			summary.Errors++
+			log.Printf("[RD WebDAV] Import failed for %s: %v", path, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if recoverableErr != nil {
+		return recoverableErr
+	}
+	return nil
+}
+
+func (b *RDWebDAVLibraryBuilder) importRDWebDAVVideoFile(ctx context.Context, cfg *isettings.Settings, sourcePath string, size int64, libraryPath string, summary *RDWebDAVLibrarySummary) error {
+	candidate, ok := parseRDWebDAVMediaFile(sourcePath)
+	if !ok {
+		summary.Skipped++
+		return nil
+	}
+	candidate.SizeBytes = size
+
+	switch candidate.MediaType {
+	case "episode":
+		created, updated, linkState, err := b.importWebDAVEpisode(ctx, cfg, candidate, libraryPath)
+		if err != nil {
+			return err
+		}
+		if created {
+			summary.SeriesAdded++
+		} else {
+			summary.SeriesUpdated++
+		}
+		if updated {
+			summary.EpisodesUpdated++
+		} else {
+			summary.EpisodesAdded++
+		}
+		recordSymlinkState(summary, linkState)
+	case "movie":
+		created, linkState, err := b.importWebDAVMovie(ctx, cfg, candidate, libraryPath)
+		if err != nil {
+			return err
+		}
+		if created {
+			summary.MoviesAdded++
+		} else {
+			summary.MoviesUpdated++
+		}
+		recordSymlinkState(summary, linkState)
+	default:
+		summary.Skipped++
+	}
+	return nil
 }
 
 func collectRDWebDAVVideoFiles(ctx context.Context, mountPath, libraryPath string, summary *RDWebDAVLibrarySummary) ([]string, error) {
