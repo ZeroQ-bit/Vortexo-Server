@@ -589,6 +589,20 @@ func (b *RDWebDAVLibraryBuilder) scanRDWebDAVVideoFiles(ctx context.Context, mou
 		return err
 	}
 	if recoverableErr != nil {
+		allowPartialFallback := true
+		if cfg != nil {
+			allowPartialFallback = cfg.RDWebDAVPartialScanFallback
+		}
+		if allowPartialFallback {
+			log.Printf("[RD WebDAV] Recoverable WebDAV walk error after partial scan: %v; keeping %d processed video file(s)", recoverableErr, summary.VideoFiles)
+			GlobalScheduler.UpdateProgress(
+				ServiceRDWebDAVLibrary,
+				summary.VideoFiles,
+				summary.VideoFiles,
+				fmt.Sprintf("WebDAV scan kept partial results after transient mount error (%d videos)", summary.VideoFiles),
+			)
+			return nil
+		}
 		return recoverableErr
 	}
 	return nil
