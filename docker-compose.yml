@@ -30,6 +30,7 @@ services:
         - streamarr_cache:/app/cache
         - streamarr_logs:/app/logs
         - ${UMBREL_ROOT}/data/storage/downloads:/app/rd-library:rslave
+        - ${UMBREL_ROOT}/data/storage/downloads:/downloads:rshared
         - ./channels:/app/channels
         - ./proxies.txt:/app/proxies.txt:ro
         - /var/run/docker.sock:/var/run/docker.sock
