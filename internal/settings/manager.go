@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -343,6 +345,33 @@ func getDefaultSettings() *Settings {
 		CacheAutoUpgrade:          true, // Auto-upgrade enabled
 		CacheMinUpgradePoints:     15,   // Require 15+ point improvement
 		CacheMaxUpgradeSizeGB:     20,   // Max 20GB size increase
+	}
+}
+
+func parseBoolValue(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(strings.ToLower(v)))
+		if err != nil {
+			return false, false
+		}
+		return parsed, true
+	case float64:
+		return v != 0, true
+	case int:
+		return v != 0, true
+	case int64:
+		return v != 0, true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return false, false
+		}
+		return n != 0, true
+	default:
+		return false, false
 	}
 }
 
@@ -921,7 +950,7 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	if v, ok := updates["rd_webdav_partial_scan_fallback"].(bool); ok {
 		m.settings.RDWebDAVPartialScanFallback = v
 	}
-	if v, ok := updates["auto_fill_missing_episodes"].(bool); ok {
+	if v, ok := parseBoolValue(updates["auto_fill_missing_episodes"]); ok {
 		m.settings.AutoFillMissingEpisodes = v
 	}
 	if v, ok := updates["total_pages"].(float64); ok {
