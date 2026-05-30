@@ -55,7 +55,8 @@ type SettingsResponse struct {
 	ShowFullStreamName    bool `json:"show_full_stream_name"`
 
 	// Collection Settings
-	AutoAddCollections bool `json:"auto_add_collections"`
+	AutoAddCollections      bool `json:"auto_add_collections"`
+	AutoFillMissingEpisodes bool `json:"auto_fill_missing_episodes"`
 
 	// Balkan VOD (GitHub Repos)
 	BalkanVODEnabled            bool     `json:"balkan_vod_enabled"`

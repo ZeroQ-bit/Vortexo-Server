@@ -138,6 +138,7 @@ interface SettingsData {
   enable_quality_variants: boolean;
   show_full_stream_name: boolean;
   auto_add_collections: boolean;
+  auto_fill_missing_episodes: boolean;
   include_live_tv: boolean;
   include_adult_vod: boolean;
   import_adult_vod_from_github: boolean;
@@ -641,6 +642,9 @@ export default function Settings() {
       );
       data.rd_webdav_partial_scan_fallback =
         data.rd_webdav_partial_scan_fallback !== false;
+      data.auto_fill_missing_episodes = Boolean(
+        data.auto_fill_missing_episodes,
+      );
 
       setSettings(data);
       void fetchTraktStatus();
@@ -3558,29 +3562,61 @@ export default function Settings() {
                 <h3 className="text-lg font-medium text-white mb-4">
                   📦 Collections
                 </h3>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="auto_add_collections"
-                      checked={settings?.auto_add_collections || false}
-                      onChange={(e) =>
-                        updateSetting("auto_add_collections", e.target.checked)
-                      }
-                      className="w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
-                    />
-                    <label
-                      htmlFor="auto_add_collections"
-                      className="text-sm text-slate-300"
-                    >
-                      Add Entire Collection
-                    </label>
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="auto_add_collections"
+                        checked={settings?.auto_add_collections || false}
+                        onChange={(e) =>
+                          updateSetting(
+                            "auto_add_collections",
+                            e.target.checked,
+                          )
+                        }
+                        className="w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
+                      />
+                      <label
+                        htmlFor="auto_add_collections"
+                        className="text-sm text-slate-300"
+                      >
+                        Add Entire Collection
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1 ml-6">
+                      When adding a movie that belongs to a collection (e.g.,
+                      The Dark Knight Trilogy), automatically add all other
+                      movies from that collection.
+                    </p>
                   </div>
-                  <p className="text-xs text-slate-500 mt-1 ml-6">
-                    When adding a movie that belongs to a collection (e.g., The
-                    Dark Knight Trilogy), automatically add all other movies
-                    from that collection.
-                  </p>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="auto_fill_missing_episodes"
+                        checked={settings?.auto_fill_missing_episodes || false}
+                        onChange={(e) =>
+                          updateSetting(
+                            "auto_fill_missing_episodes",
+                            e.target.checked,
+                          )
+                        }
+                        className="w-4 h-4 bg-[#2a2a2a] border-white/10 rounded"
+                      />
+                      <label
+                        htmlFor="auto_fill_missing_episodes"
+                        className="text-sm text-slate-300"
+                      >
+                        Add Missing Series Episodes
+                      </label>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1 ml-6">
+                      When Debrid WebDAV imports a show, automatically add
+                      missing episode rows for all seasons before and after the
+                      matched season so stream-fill workers can complete gaps.
+                    </p>
+                  </div>
                 </div>
               </div>
 

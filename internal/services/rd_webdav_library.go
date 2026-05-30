@@ -51,24 +51,27 @@ type RDWebDAVLibraryBuilder struct {
 	tmdbClient     *TMDBClient
 	settingsGetter func() *isettings.Settings
 
-	mu       sync.Mutex
-	mountCmd *exec.Cmd
+	mu               sync.Mutex
+	mountCmd         *exec.Cmd
+	autoFillMu       sync.Mutex
+	autoFilledSeries map[int64]struct{}
 }
 
 type RDWebDAVLibrarySummary struct {
-	FilesSeen        int `json:"files_seen"`
-	VideoFiles       int `json:"video_files"`
-	MoviesAdded      int `json:"movies_added"`
-	MoviesUpdated    int `json:"movies_updated"`
-	SeriesAdded      int `json:"series_added"`
-	SeriesUpdated    int `json:"series_updated"`
-	EpisodesAdded    int `json:"episodes_added"`
-	EpisodesUpdated  int `json:"episodes_updated"`
-	SymlinksCreated  int `json:"symlinks_created"`
-	SymlinksUpdated  int `json:"symlinks_updated"`
-	StaleLinksPruned int `json:"stale_links_pruned"`
-	Skipped          int `json:"skipped"`
-	Errors           int `json:"errors"`
+	FilesSeen            int `json:"files_seen"`
+	VideoFiles           int `json:"video_files"`
+	MoviesAdded          int `json:"movies_added"`
+	MoviesUpdated        int `json:"movies_updated"`
+	SeriesAdded          int `json:"series_added"`
+	SeriesUpdated        int `json:"series_updated"`
+	EpisodesAdded        int `json:"episodes_added"`
+	EpisodesUpdated      int `json:"episodes_updated"`
+	MissingEpisodesAdded int `json:"missing_episodes_added"`
+	SymlinksCreated      int `json:"symlinks_created"`
+	SymlinksUpdated      int `json:"symlinks_updated"`
+	StaleLinksPruned     int `json:"stale_links_pruned"`
+	Skipped              int `json:"skipped"`
+	Errors               int `json:"errors"`
 }
 
 type rdWebDAVMediaCandidate struct {
@@ -117,11 +120,12 @@ func NewRDWebDAVLibraryBuilder(
 	settingsGetter func() *isettings.Settings,
 ) *RDWebDAVLibraryBuilder {
 	return &RDWebDAVLibraryBuilder{
-		movieStore:     movieStore,
-		seriesStore:    seriesStore,
-		episodeStore:   episodeStore,
-		tmdbClient:     tmdbClient,
-		settingsGetter: settingsGetter,
+		movieStore:       movieStore,
+		seriesStore:      seriesStore,
+		episodeStore:     episodeStore,
+		tmdbClient:       tmdbClient,
+		settingsGetter:   settingsGetter,
+		autoFilledSeries: make(map[int64]struct{}),
 	}
 }
 
@@ -144,6 +148,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 	if b.tmdbClient == nil || strings.TrimSpace(cfg.TMDBAPIKey) == "" {
 		return summary, fmt.Errorf("TMDB API key is required for debrid WebDAV library matching")
 	}
+	b.resetAutoFillState()
 
 	mountPath := cleanConfiguredPath(cfg.RDWebDAVMountPath, isettings.DefaultRDWebDAVMountPath)
 	libraryPath := cleanConfiguredPath(cfg.RDWebDAVLibraryPath, isettings.DefaultRDWebDAVLibraryPath)
@@ -189,7 +194,7 @@ func (b *RDWebDAVLibraryBuilder) Build(ctx context.Context) (*RDWebDAVLibrarySum
 		ServiceRDWebDAVLibrary,
 		summary.VideoFiles,
 		summary.VideoFiles,
-		fmt.Sprintf("Debrid WebDAV scan complete: %d movies, %d episodes, %d symlinks", summary.MoviesAdded+summary.MoviesUpdated, summary.EpisodesAdded+summary.EpisodesUpdated, summary.SymlinksCreated+summary.SymlinksUpdated),
+		fmt.Sprintf("Debrid WebDAV scan complete: %d movies, %d episodes, %d missing episodes, %d symlinks", summary.MoviesAdded+summary.MoviesUpdated, summary.EpisodesAdded+summary.EpisodesUpdated, summary.MissingEpisodesAdded, summary.SymlinksCreated+summary.SymlinksUpdated),
 	)
 	log.Printf("[RD WebDAV] Scan complete: %+v", summary)
 	return summary, nil
@@ -200,6 +205,12 @@ func (b *RDWebDAVLibraryBuilder) currentSettings() *isettings.Settings {
 		return nil
 	}
 	return b.settingsGetter()
+}
+
+func (b *RDWebDAVLibraryBuilder) resetAutoFillState() {
+	b.autoFillMu.Lock()
+	defer b.autoFillMu.Unlock()
+	b.autoFilledSeries = make(map[int64]struct{})
 }
 
 func (b *RDWebDAVLibraryBuilder) ensureRcloneMount(ctx context.Context, cfg *isettings.Settings, mountPath string) error {
@@ -618,7 +629,7 @@ func (b *RDWebDAVLibraryBuilder) importRDWebDAVVideoFile(ctx context.Context, cf
 
 	switch candidate.MediaType {
 	case "episode":
-		created, updated, linkState, err := b.importWebDAVEpisode(ctx, cfg, candidate, libraryPath)
+		created, updated, linkState, missingAdded, err := b.importWebDAVEpisode(ctx, cfg, candidate, libraryPath)
 		if err != nil {
 			return err
 		}
@@ -632,6 +643,7 @@ func (b *RDWebDAVLibraryBuilder) importRDWebDAVVideoFile(ctx context.Context, cf
 		} else {
 			summary.EpisodesAdded++
 		}
+		summary.MissingEpisodesAdded += missingAdded
 		recordSymlinkState(summary, linkState)
 	case "movie":
 		created, linkState, err := b.importWebDAVMovie(ctx, cfg, candidate, libraryPath)
@@ -899,17 +911,17 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVMovie(ctx context.Context, cfg *ise
 	return added, linkState, nil
 }
 
-func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *isettings.Settings, candidate rdWebDAVMediaCandidate, libraryPath string) (bool, bool, string, error) {
+func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *isettings.Settings, candidate rdWebDAVMediaCandidate, libraryPath string) (bool, bool, string, int, error) {
 	series, err := b.matchWebDAVSeries(ctx, candidate)
 	if err != nil {
-		return false, false, "", err
+		return false, false, "", 0, err
 	}
 	if series == nil {
-		return false, false, "", fmt.Errorf("no TMDB series match for %q", candidate.Title)
+		return false, false, "", 0, fmt.Errorf("no TMDB series match for %q", candidate.Title)
 	}
 	opts := contentFilterOptionsFromSettings(cfg)
 	if allowed, reason := SeriesAllowedByContentFilters(series, opts); !allowed {
-		return false, false, "", fmt.Errorf("%w: %s", ErrBlockedContentFilter, reason)
+		return false, false, "", 0, fmt.Errorf("%w: %s", ErrBlockedContentFilter, reason)
 	}
 
 	seriesAdded := false
@@ -923,18 +935,18 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *i
 		seriesAdded = true
 		if err := b.seriesStore.Add(ctx, series); err != nil {
 			if !strings.Contains(strings.ToLower(err.Error()), "duplicate") {
-				return false, false, "", err
+				return false, false, "", 0, err
 			}
 			series, err = b.seriesStore.GetByTMDBID(ctx, series.TMDBID)
 			if err != nil {
-				return false, false, "", err
+				return false, false, "", 0, err
 			}
 			seriesAdded = false
 		}
 	}
 	if !seriesAdded && markRDWebDAVSeriesMetadata(series, candidate) {
 		if err := b.seriesStore.Update(ctx, series); err != nil {
-			return false, false, "", err
+			return false, false, "", 0, err
 		}
 	}
 
@@ -942,7 +954,7 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *i
 	linkPath := episodeSymlinkPath(libraryPath, series, episode, candidate)
 	linkState, err := ensureSymlink(candidate.SourcePath, linkPath)
 	if err != nil {
-		return seriesAdded, false, "", err
+		return seriesAdded, false, "", 0, err
 	}
 	removeLegacyTMDBSeriesFolder(libraryPath, series, filepath.Dir(filepath.Dir(linkPath)))
 
@@ -969,12 +981,79 @@ func (b *RDWebDAVLibraryBuilder) importWebDAVEpisode(ctx context.Context, cfg *i
 
 	if episodeUpdated {
 		if err := b.episodeStore.Update(ctx, episode); err != nil {
-			return seriesAdded, false, linkState, err
+			return seriesAdded, false, linkState, 0, err
 		}
 	} else if err := b.episodeStore.Add(ctx, episode); err != nil {
-		return seriesAdded, false, linkState, err
+		return seriesAdded, false, linkState, 0, err
 	}
-	return seriesAdded, episodeUpdated, linkState, nil
+
+	missingAdded := 0
+	if cfg != nil && cfg.AutoFillMissingEpisodes {
+		var fillErr error
+		missingAdded, fillErr = b.fillMissingEpisodesForWebDAVSeries(ctx, series)
+		if fillErr != nil {
+			log.Printf("[RD WebDAV] Missing episode fill failed for %s: %v", series.Title, fillErr)
+		}
+	}
+	return seriesAdded, episodeUpdated, linkState, missingAdded, nil
+}
+
+func (b *RDWebDAVLibraryBuilder) fillMissingEpisodesForWebDAVSeries(ctx context.Context, series *models.Series) (int, error) {
+	if b == nil || series == nil || series.ID == 0 || series.TMDBID == 0 || series.Seasons <= 0 {
+		return 0, nil
+	}
+	if !b.markSeriesAutoFillStarted(series.ID) {
+		return 0, nil
+	}
+
+	episodes, err := b.tmdbClient.GetEpisodes(ctx, series.ID, series.TMDBID, series.Seasons)
+	if err != nil {
+		return 0, err
+	}
+
+	added := 0
+	now := time.Now()
+	for _, episode := range episodes {
+		if episode == nil || episode.SeasonNumber <= 0 || episode.EpisodeNumber <= 0 {
+			continue
+		}
+		if existing, err := b.episodeStore.GetBySeriesAndNumber(ctx, series.ID, episode.SeasonNumber, episode.EpisodeNumber); err == nil && existing != nil {
+			continue
+		}
+		episode.SeriesID = series.ID
+		episode.Monitored = true
+		episode.Available = false
+		episode.LastChecked = &now
+		if episode.Metadata == nil {
+			episode.Metadata = models.Metadata{}
+		}
+		episode.Metadata["rd_webdav_auto_filled"] = true
+		episode.Metadata["rd_webdav_auto_filled_at"] = now.UTC().Format(time.RFC3339)
+		if err := b.episodeStore.Add(ctx, episode); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate") {
+				continue
+			}
+			return added, err
+		}
+		added++
+	}
+	if added > 0 {
+		log.Printf("[RD WebDAV] Auto-filled %d missing episode row(s) for %s", added, series.Title)
+	}
+	return added, nil
+}
+
+func (b *RDWebDAVLibraryBuilder) markSeriesAutoFillStarted(seriesID int64) bool {
+	b.autoFillMu.Lock()
+	defer b.autoFillMu.Unlock()
+	if b.autoFilledSeries == nil {
+		b.autoFilledSeries = make(map[int64]struct{})
+	}
+	if _, ok := b.autoFilledSeries[seriesID]; ok {
+		return false
+	}
+	b.autoFilledSeries[seriesID] = struct{}{}
+	return true
 }
 
 func (b *RDWebDAVLibraryBuilder) matchWebDAVMovie(ctx context.Context, candidate rdWebDAVMediaCandidate) (*models.Movie, error) {

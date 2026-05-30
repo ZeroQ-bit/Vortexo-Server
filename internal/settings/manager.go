@@ -90,11 +90,12 @@ type Settings struct {
 	CometURL string `json:"comet_url"`
 
 	// Quality Settings
-	MaxResolution         int  `json:"max_resolution"`
-	MaxFileSize           int  `json:"max_file_size"`
-	EnableQualityVariants bool `json:"enable_quality_variants"`
-	ShowFullStreamName    bool `json:"show_full_stream_name"`
-	AutoAddCollections    bool `json:"auto_add_collections"` // Automatically add entire collection when adding a movie
+	MaxResolution           int  `json:"max_resolution"`
+	MaxFileSize             int  `json:"max_file_size"`
+	EnableQualityVariants   bool `json:"enable_quality_variants"`
+	ShowFullStreamName      bool `json:"show_full_stream_name"`
+	AutoAddCollections      bool `json:"auto_add_collections"`       // Automatically add entire collection when adding a movie
+	AutoFillMissingEpisodes bool `json:"auto_fill_missing_episodes"` // Add missing episode rows for WebDAV-matched series
 
 	// Playlist Settings
 	TotalPages                     int    `json:"total_pages"`
@@ -304,6 +305,7 @@ func getDefaultSettings() *Settings {
 		RDWebDAVCleanStaleSymlinks:      true,
 		RDWebDAVPreferWebDAVLibraryOnly: false,
 		RDWebDAVPartialScanFallback:     true,
+		AutoFillMissingEpisodes:         false,
 		StremioAddons:                   []StremioAddon{}, // Empty by default - users should configure their own addons
 		StremioAddon: StremioAddonConfig{
 			Enabled:          false,
@@ -758,6 +760,7 @@ func (m *Manager) GetAll() (map[string]interface{}, error) {
 		"rd_webdav_clean_stale_symlinks":       m.settings.RDWebDAVCleanStaleSymlinks,
 		"rd_webdav_prefer_webdav_library_only": m.settings.RDWebDAVPreferWebDAVLibraryOnly,
 		"rd_webdav_partial_scan_fallback":      m.settings.RDWebDAVPartialScanFallback,
+		"auto_fill_missing_episodes":           m.settings.AutoFillMissingEpisodes,
 		"total_pages":                          m.settings.TotalPages,
 		"min_year":                             m.settings.MinYear,
 		"min_runtime":                          m.settings.MinRuntime,
@@ -917,6 +920,9 @@ func (m *Manager) SetAll(updates map[string]interface{}) error {
 	}
 	if v, ok := updates["rd_webdav_partial_scan_fallback"].(bool); ok {
 		m.settings.RDWebDAVPartialScanFallback = v
+	}
+	if v, ok := updates["auto_fill_missing_episodes"].(bool); ok {
+		m.settings.AutoFillMissingEpisodes = v
 	}
 	if v, ok := updates["total_pages"].(float64); ok {
 		m.settings.TotalPages = int(v)
